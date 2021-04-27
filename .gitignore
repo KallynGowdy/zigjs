@@ -1,0 +1,4 @@
+# Zig generated files
+/zig-cache
+debug
+release
