@@ -31,7 +31,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const DynBuf = struct {
+pub const DynBuf = struct {
     buf: []u8,
     size: usize,
     allocated_size: usize,
