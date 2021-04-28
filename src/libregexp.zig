@@ -52,7 +52,7 @@ const CharRange = unicode.CharRange;
 // #define DUMP_REOP
 // #endif
 
-const REOPCodeEnum = enum {
+const REOPCodeEnum = enum(u8) {
     invalid, // never used 
     char,
     char32,
@@ -92,14 +92,16 @@ const STACK_SIZE_MAX: u8 = 255;
 const CP_LS: u32 = 0x2028;
 const CP_PS: u32 = 0x2029;
 
-const TMP_BF_SIZE: u8 = 128;
+const TMP_BUF_SIZE: u8 = 128;
 
 const CType = opaque{};
 
+pub const ByteCodeBuffer = std.ArrayList(u8);
+
 const REParseState = struct {
-    byte_code: cutils.DynBuf,
-    buf: []u8,
-    buf_start: []u8,
+    const Self = @This();
+
+    byte_code: ByteCodeBuffer,
     re_flags: i32,
     
     is_utf16: bool,
@@ -110,10 +112,30 @@ const REParseState = struct {
     has_named_captures: i32, // -1 = don't know, 0 = no, 1 = yes */
 
     allocator: *std.mem.Allocator,
-    group_names: DynBuf,
-    u: union {
+    // group_names: DynBuf,
+    u: ?union {
         error_msg: [TMP_BUF_SIZE]u8,
         tmp_buf: [TMP_BUF_SIZE]u8,
+    },
+
+    pub fn init(allocator: *std.mem.Allocator) Self {
+        return Self{
+            .byte_code = ByteCodeBuffer.init(allocator),
+            .re_flags = 0,
+            .is_utf16 = false,
+            .ignore_case = false,
+            .dotall = false,
+            .capture_count = -1,
+            .total_capture_count = -1,
+            .has_named_captures = -1,
+            .allocator = allocator,
+            // .group_names
+            .u = null
+        };
+    }
+
+    pub fn deinit(self: Self) void {
+        self.byte_code.deinit();
     }
 };
 
@@ -600,41 +622,172 @@ test "cr_canonicalize()" {
 // }
 // #endif
 
-// static void re_emit_op(REParseState *s, int op)
-// {
-//     dbuf_putc(&s->byte_code, op);
-// }
+fn re_emit_op(state: *REParseState, op: REOPCodeEnum) !void {
+    try state.byte_code.append(@enumToInt(op));
+}
+
+test "re_emit_op" {
+    const a = testing.allocator;
+    {
+        var state = REParseState.init(a);
+        defer state.deinit();
+
+        try re_emit_op(&state, .dot);
+
+        testing.expect(state.byte_code.items.len == 1);
+        testing.expect(state.byte_code.items[0] == @enumToInt(REOPCodeEnum.dot));
+    }
+}
 
 // /* return the offset of the u32 value */
-// static int re_emit_op_u32(REParseState *s, int op, uint32_t val)
-// {
-//     int pos;
-//     dbuf_putc(&s->byte_code, op);
-//     pos = s->byte_code.size;
-//     dbuf_put_u32(&s->byte_code, val);
-//     return pos;
-// }
+fn re_emit_op_u32(state: *REParseState, op: REOPCodeEnum, val: u32) !usize
+{
+    try state.byte_code.append(@enumToInt(op));
+    const pos = state.byte_code.items.len;
+    const bytes = std.mem.toBytes(val);
+    try state.byte_code.appendSlice(&bytes);
+    return pos;
+    // int pos;
+    // dbuf_putc(&s->byte_code, op);
+    // pos = s->byte_code.size;
+    // dbuf_put_u32(&s->byte_code, val);
+    // return pos;
+}
 
-// static int re_emit_goto(REParseState *s, int op, uint32_t val)
-// {
-//     int pos;
-//     dbuf_putc(&s->byte_code, op);
-//     pos = s->byte_code.size;
-//     dbuf_put_u32(&s->byte_code, val - (pos + 4));
-//     return pos;
-// }
+test "re_emit_op_u32()" {
+    const a = testing.allocator;
+    {
+        var state = REParseState.init(a);
+        defer state.deinit();
 
-// static void re_emit_op_u8(REParseState *s, int op, uint32_t val)
-// {
-//     dbuf_putc(&s->byte_code, op);
-//     dbuf_putc(&s->byte_code, val);
-// }
+        const pos = try re_emit_op_u32(&state, .dot, 0x65542);
 
-// static void re_emit_op_u16(REParseState *s, int op, uint32_t val)
-// {
-//     dbuf_putc(&s->byte_code, op);
-//     dbuf_put_u16(&s->byte_code, val);
-// }
+        testing.expect(state.byte_code.items.len == 5);
+        testing.expect(state.byte_code.items[0] == @enumToInt(REOPCodeEnum.dot));
+        testing.expect(pos == 1);
+
+        const bytes = std.mem.toBytes(@as(u32, 0x65542));
+        testing.expect(state.byte_code.items[1] == bytes[0]);
+        testing.expect(state.byte_code.items[2] == bytes[1]);
+        testing.expect(state.byte_code.items[3] == bytes[2]);
+        testing.expect(state.byte_code.items[4] == bytes[3]);
+    }
+}
+
+fn re_emit_goto(state: *REParseState, op: REOPCodeEnum, val: u32) !usize {
+    try state.byte_code.append(@enumToInt(op));
+    const pos = state.byte_code.items.len;
+    const adjusted_val: u32 = val - (@intCast(u32, pos) + 4);
+    const bytes = std.mem.toBytes(adjusted_val);
+    try state.byte_code.appendSlice(&bytes);
+    return pos;
+    // int pos;
+    // dbuf_putc(&s->byte_code, op);
+    // pos = s->byte_code.size;
+    // dbuf_put_u32(&s->byte_code, val - (pos + 4));
+    // return pos;
+}
+
+test "re_emit_goto()" {
+    const a = testing.allocator;
+    {
+        var state = REParseState.init(a);
+        defer state.deinit();
+
+        const pos = try re_emit_goto(&state, .dot, 0x65542);
+
+        testing.expect(state.byte_code.items.len == 5);
+        testing.expect(state.byte_code.items[0] == @enumToInt(REOPCodeEnum.dot));
+        testing.expect(pos == 1);
+
+        const bytes = std.mem.toBytes(@as(u32, 0x65542 - (5)));
+        testing.expect(state.byte_code.items[1] == bytes[0]);
+        testing.expect(state.byte_code.items[2] == bytes[1]);
+        testing.expect(state.byte_code.items[3] == bytes[2]);
+        testing.expect(state.byte_code.items[4] == bytes[3]);
+    }
+}
+
+fn re_emit_op_u8(state: *REParseState, op: REOPCodeEnum, val: u8) !void {
+    try state.byte_code.append(@enumToInt(op));
+    try state.byte_code.append(val);
+}
+
+test "re_emit_op_u8()" {
+    const a = testing.allocator;
+    {
+        var state = REParseState.init(a);
+        defer state.deinit();
+
+        try re_emit_op_u8(&state, .dot, 211);
+
+        testing.expect(state.byte_code.items.len == 2);
+        testing.expect(state.byte_code.items[0] == @enumToInt(REOPCodeEnum.dot));
+        testing.expect(state.byte_code.items[1] == 211);
+    }
+}
+
+fn re_emit_op_u16(state: *REParseState, op: REOPCodeEnum, val: u16) !void {
+    try state.byte_code.append(@enumToInt(op));
+    const bytes = std.mem.toBytes(val);
+    try state.byte_code.appendSlice(&bytes);
+}
+
+test "re_emit_op_u16()" {
+    const a = testing.allocator;
+    {
+        var state = REParseState.init(a);
+        defer state.deinit();
+
+        try re_emit_op_u16(&state, .dot, 1280);
+
+        const bytes = std.mem.toBytes(@as(u16, 1280));
+        testing.expect(state.byte_code.items.len == 3);
+        testing.expect(state.byte_code.items[0] == @enumToInt(REOPCodeEnum.dot));
+        testing.expect(state.byte_code.items[1] == bytes[0]);
+        testing.expect(state.byte_code.items[2] == bytes[1]);
+    }
+}
+
+const REParseError = error {
+    OutOfMemory,
+};
+
+const Reader = struct {
+    buffer: []const u8,
+    pos: usize,
+
+    const Self = @This();
+
+    pub const Error = error {
+        EndOfStream
+    };
+
+    pub fn fromSlice(slice: []const u8) Self {
+        return Self{
+            .buffer = slice,
+            .pos = 0
+        };
+    }
+
+    pub fn readByte(self: *Self) !u8 {
+        const byte = try self.peekByte();
+        self.pos += 1;
+        return byte;
+    }
+
+    pub fn peekByte(self: *Self) !u8 {
+        if (self.pos >= self.buffer.len) {
+            return error.EndOfStream;
+        }
+
+        return self.buffer[self.pos];
+    }
+
+    pub fn advance(self: *Self, amount: usize) void {
+        self.pos += amount;
+    }
+};
 
 // static int __attribute__((format(printf, 2, 3))) re_parse_error(REParseState *s, const char *fmt, ...)
 // {
@@ -650,32 +803,100 @@ test "cr_canonicalize()" {
 //     return re_parse_error(s, "out of memory");
 // }
 
+const ParseError = error {
+    UnexpectedEndOfStream,
+    UnexpectedOverflow
+};
+
 // /* If allow_overflow is false, return -1 in case of
 //    overflow. Otherwise return INT32_MAX. */
-// static int parse_digits(const uint8_t **pp, BOOL allow_overflow)
-// {
-//     const uint8_t *p;
-//     uint64_t v;
-//     int c;
+/// Parses
+fn parse_digits(reader: *Reader, allow_overflow: bool) !i32 {
+    var value: i64 = 0;
+    while(true) {
+        const char = reader.peekByte() catch return error.UnexpectedEndOfStream;
+        if (char < @as(u8, '0') or char > @as(u8, '9')) {
+            break;
+        }
+        value = value * 10 + (char - @as(u8, '0'));
+        if (value >= std.math.maxInt(i32)) {
+            if (allow_overflow) {
+                value = std.math.maxInt(i32);
+                break;
+            } else {
+                return error.UnexpectedOverflow;
+            }
+        }
+        reader.advance(1);
+    }
+    return @intCast(i32, value);
+    // const uint8_t *p;
+    // uint64_t v;
+    // int c;
     
-//     p = *pp;
-//     v = 0;
-//     for(;;) {
-//         c = *p;
-//         if (c < '0' || c > '9')
-//             break;
-//         v = v * 10 + c - '0';
-//         if (v >= INT32_MAX) {
-//             if (allow_overflow)
-//                 v = INT32_MAX;
-//             else
-//                 return -1;
-//         }
-//         p++;
-//     }
-//     *pp = p;
-//     return v;
-// }
+    // p = *pp;
+    // v = 0;
+    // for(;;) {
+    //     c = *p;
+    //     if (c < '0' || c > '9')
+    //         break;
+    //     v = v * 10 + c - '0';
+    //     if (v >= INT32_MAX) {
+    //         if (allow_overflow)
+    //             v = INT32_MAX;
+    //         else
+    //             return -1;
+    //     }
+    //     p++;
+    // }
+    // *pp = p;
+    // return v;
+}
+
+test "parse_digits()" {
+    const a = testing.allocator;
+    {
+        // parse number from segment
+        var reader = Reader.fromSlice("12345}");
+        
+        const val = try parse_digits(&reader, false);
+
+        testing.expect(reader.pos == 5);
+        testing.expect(val == 12345);
+    }
+    {
+        // throw unexpected end
+        var reader = Reader.fromSlice("12345");
+        
+        const val = parse_digits(&reader, false);
+
+        if (val) {
+            unreachable;
+        } else |err| {
+            testing.expect(err == ParseError.UnexpectedEndOfStream);
+        }
+    }
+    {
+        // throw unexpected overflow
+        var reader = Reader.fromSlice("123450000000");
+        
+        const val = parse_digits(&reader, false);
+
+        if (val) {
+            unreachable;
+        } else |err| {
+            testing.expect(err == ParseError.UnexpectedOverflow);
+        }
+    }
+    {
+        // return max value
+        var reader = Reader.fromSlice("123450000000");
+        
+        const val = try parse_digits(&reader, true);
+
+        testing.expect(val == std.math.maxInt(i32));
+    }
+}
 
 // static int re_parse_expect(REParseState *s, const uint8_t **pp, int c)
 // {

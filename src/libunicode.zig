@@ -222,3 +222,34 @@ pub fn cr_union1(cr: *CharRange, other_points: []const u32) !CharRange {
     const result = try cr_op(cr.allocator, cr.items, other_points, .CR_OP_UNION);
     return result;
 }
+
+test "cr_union1()" {
+    const a = testing.allocator;
+    {
+        // union
+        var first = CharRange.init(a);
+        defer first.deinit();
+        try first.append('a');
+        try first.append('d');
+        try first.append('w');
+        try first.append('z');
+
+        const second: []const u32 = &[_] u32{
+            'a', 'c', 'j', 'l'
+        };
+
+        const result = try cr_union1(&first, second);
+        defer result.deinit();
+
+        // const result = cr_op(a, first, second, .CR_OP_UNION) catch unreachable;
+        // defer result.deinit();
+
+        testing.expect(result.items.len == 6);
+        testing.expect(result.items[0] == 'a');
+        testing.expect(result.items[1] == 'd');
+        testing.expect(result.items[2] == 'j');
+        testing.expect(result.items[3] == 'l');
+        testing.expect(result.items[4] == 'w');
+        testing.expect(result.items[5] == 'z');
+    }
+}
