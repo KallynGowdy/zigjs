@@ -29,6 +29,7 @@
 
 // #include "cutils.h"
 const std = @import("std");
+const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
 pub const DynBuf = struct {
@@ -522,3 +523,52 @@ pub fn unicode_from_utf8(buf: []const u8, max_len: i32, out: **const u8) i32
 //         }
 //     }
 // }
+
+const HexParseError = error {
+    InvalidChar
+};
+
+
+pub fn from_hex(char: u8) !u8 {
+    if (char >= '0' and char <= '9') {
+        return char - '0';
+    } else if (char >= 'A' and char <= 'F') {
+        return char - 'A' + 10;
+    } else if (char >= 'a' and char <= 'f') {
+        return char - 'a' + 10;
+    } else {
+        return HexParseError.InvalidChar;
+    }
+}
+
+test "from_hex()" {
+    {
+        // decimal digits
+        testing.expect((try from_hex('0')) == 0);
+        testing.expect((try from_hex('1')) == 1);
+        testing.expect((try from_hex('2')) == 2);
+        testing.expect((try from_hex('3')) == 3);
+        testing.expect((try from_hex('4')) == 4);
+        testing.expect((try from_hex('5')) == 5);
+        testing.expect((try from_hex('6')) == 6);
+        testing.expect((try from_hex('7')) == 7);
+        testing.expect((try from_hex('8')) == 8);
+        testing.expect((try from_hex('9')) == 9);
+
+        // hex digits
+        testing.expect((try from_hex('A')) == 10);
+        testing.expect((try from_hex('B')) == 11);
+        testing.expect((try from_hex('C')) == 12);
+        testing.expect((try from_hex('D')) == 13);
+        testing.expect((try from_hex('E')) == 14);
+        testing.expect((try from_hex('F')) == 15);
+        testing.expect((try from_hex('a')) == 10);
+        testing.expect((try from_hex('b')) == 11);
+        testing.expect((try from_hex('c')) == 12);
+        testing.expect((try from_hex('d')) == 13);
+        testing.expect((try from_hex('e')) == 14);
+        testing.expect((try from_hex('f')) == 15);
+
+        testing.expectError(HexParseError.InvalidChar, from_hex('!'));
+    }
+}

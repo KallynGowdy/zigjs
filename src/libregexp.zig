@@ -183,9 +183,9 @@ const RE_HEADER_STACK_SIZE: u8 =    2;
 
 const RE_HEADER_LEN: u8 = 7;
 
-// inline fn is_digit(c: i32) bool {
-//     return c >= '0' and c <= '9';
-// }
+fn is_digit(char: u32) bool {
+    return char >= '0' and char <= '9';
+}
 
 pub fn move(comptime T: type, dest: []T, src: []const T) []T {
     assert(dest.len >= source.len);
@@ -755,7 +755,7 @@ const REParseError = error {
 
 const Reader = struct {
     buffer: []const u8,
-    pos: usize,
+    position: usize,
 
     const Self = @This();
 
@@ -766,26 +766,35 @@ const Reader = struct {
     pub fn fromSlice(slice: []const u8) Self {
         return Self{
             .buffer = slice,
-            .pos = 0
+            .position = 0
         };
     }
 
     pub fn readByte(self: *Self) !u8 {
         const byte = try self.peekByte();
-        self.pos += 1;
+        self.position += 1;
         return byte;
     }
 
     pub fn peekByte(self: *Self) !u8 {
-        if (self.pos >= self.buffer.len) {
-            return error.EndOfStream;
+        if (self.position >= self.buffer.len) {
+            return Error.EndOfStream;
         }
 
-        return self.buffer[self.pos];
+        return self.buffer[self.position];
+    }
+
+    pub fn peekByteAt(self: *Self, position: usize) !u8 {
+        const finalPosition = self.position + position;
+        if (finalPosition >= self.buffer.len) {
+            return Error.EndOfStream;
+        }
+
+        return self.buffer[finalPosition];
     }
 
     pub fn advance(self: *Self, amount: usize) void {
-        self.pos += amount;
+        self.position += amount;
     }
 };
 
@@ -805,7 +814,9 @@ const Reader = struct {
 
 const ParseError = error {
     UnexpectedEndOfStream,
-    UnexpectedOverflow
+    UnexpectedOverflow,
+    ExpectedClosingParenthesis,
+    ExpectedClosingBrace,
 };
 
 // /* If allow_overflow is false, return -1 in case of
@@ -861,7 +872,7 @@ test "parse_digits()" {
         
         const val = try parse_digits(&reader, false);
 
-        testing.expect(reader.pos == 5);
+        testing.expect(reader.position == 5);
         testing.expect(val == 12345);
     }
     {
@@ -898,16 +909,49 @@ test "parse_digits()" {
     }
 }
 
-// static int re_parse_expect(REParseState *s, const uint8_t **pp, int c)
-// {
-//     const uint8_t *p;
-//     p = *pp;
-//     if (*p != c)
-//         return re_parse_error(s, "expecting '%c'", c);
-//     p++;
-//     *pp = p;
-//     return 0;
-// }
+fn re_parse_expect(reader: *Reader, char: u8, expected: ParseError) !void {
+    const currentChar = try reader.peekByte();
+    if (currentChar != char) {
+        return expected;
+    }
+    reader.advance(1);
+}
+
+test "re_parse_expect()" {
+    const a = testing.allocator;
+    {
+        // parse what is expected
+        var reader = Reader.fromSlice("}");
+        
+        try re_parse_expect(&reader, '}', ParseError.ExpectedClosingBrace);
+
+        testing.expect(reader.position == 1);
+    }
+    {
+        // throw given error
+        var reader = Reader.fromSlice("a");
+        
+        const result = re_parse_expect(&reader, '}', ParseError.ExpectedClosingBrace);
+
+        if (result) {
+            unreachable;
+        } else |err| {
+            testing.expect(err == ParseError.ExpectedClosingBrace);
+        }
+        testing.expect(reader.position == 0);
+    }
+}
+
+const ParseUTF16Option = enum {
+    NoUTF16,
+    UTF16,
+    UTF16AndSurragatePairs
+};
+
+const ParseEscapeError = error {
+    MalformedEscape,
+    GeneralError
+};
 
 // /* Parse an escape sequence, *pp points after the '\':
 //    allow_utf16 value:
@@ -919,115 +963,214 @@ test "parse_digits()" {
 //    Return the unicode char and update *pp if recognized,
 //    return -1 if malformed escape,
 //    return -2 otherwise. */
-// int lre_parse_escape(const uint8_t **pp, int allow_utf16)
-// {
-//     const uint8_t *p;
-//     uint32_t c;
+fn lre_parse_escape(reader: *Reader, allow_utf16: ParseUTF16Option) !u32 {
+    var char: u8 = try reader.readByte();
 
-//     p = *pp;
-//     c = *p++;
-//     switch(c) {
-//     case 'b':
-//         c = '\b';
-//         break;
-//     case 'f':
-//         c = '\f';
-//         break;
-//     case 'n':
-//         c = '\n';
-//         break;
-//     case 'r':
-//         c = '\r';
-//         break;
-//     case 't':
-//         c = '\t';
-//         break;
-//     case 'v':
-//         c = '\v';
-//         break;
-//     case 'x':
-//     case 'u':
-//         {
-//             int h, n, i;
-//             uint32_t c1;
+    return switch(char) {
+        'b' => '\x08', // backspace char
+        'f' => '\x0C', // form feed char
+        'n' => '\n', // newline
+        'r' => '\r', // carriage return
+        't' => '\t', // tab
+        'v' => '\x0B', // vertical tab
+        'u', 'x' => blk: {
+            var result: u32 = 0;
             
-//             if (*p == '{' && allow_utf16) {
-//                 p++;
-//                 c = 0;
-//                 for(;;) {
-//                     h = from_hex(*p++);
-//                     if (h < 0)
-//                         return -1;
-//                     c = (c << 4) | h;
-//                     if (c > 0x10FFFF)
-//                         return -1;
-//                     if (*p == '}')
-//                         break;
-//                 }
-//                 p++;
-//             } else {
-//                 if (c == 'x') {
-//                     n = 2;
-//                 } else {
-//                     n = 4;
-//                 }
+            if ((try reader.peekByte()) == '{' and allow_utf16 != ParseUTF16Option.NoUTF16) {
+                reader.advance(1);
+                while(true) {
+                    const hexResult = cutils.from_hex(try reader.readByte());
+                    if (hexResult) |hex| {
+                        result = (result << 4) | hex;
+                        if (result > 0x10FFFF) {
+                            return ParseEscapeError.MalformedEscape;
+                        }
+                        if ((try reader.peekByte()) == '}') {
+                            break;
+                        }
+                    } else |err| {
+                        return ParseEscapeError.MalformedEscape;
+                    }
+                }
+                reader.advance(1);
+            } else {
+                var numChars: u32 = 0;
+                if (char == 'x') {
+                    numChars = 2;
+                } else {
+                    numChars = 4;
+                }
 
-//                 c = 0;
-//                 for(i = 0; i < n; i++) {
-//                     h = from_hex(*p++);
-//                     if (h < 0) {
-//                         return -1;
-//                     }
-//                     c = (c << 4) | h;
-//                 }
-//                 if (c >= 0xd800 && c < 0xdc00 &&
-//                     allow_utf16 == 2 && p[0] == '\\' && p[1] == 'u') {
-//                     /* convert an escaped surrogate pair into a
-//                        unicode char */
-//                     c1 = 0;
-//                     for(i = 0; i < 4; i++) {
-//                         h = from_hex(p[2 + i]);
-//                         if (h < 0)
-//                             break;
-//                         c1 = (c1 << 4) | h;
-//                     }
-//                     if (i == 4 && c1 >= 0xdc00 && c1 < 0xe000) {
-//                         p += 6;
-//                         c = (((c & 0x3ff) << 10) | (c1 & 0x3ff)) + 0x10000;
-//                     }
-//                 }
-//             }
-//         }
-//         break;
-//     case '0' ... '7':
-//         c -= '0';
-//         if (allow_utf16 == 2) {
-//             /* only accept \0 not followed by digit */
-//             if (c != 0 || is_digit(*p))
-//                 return -1;
-//         } else {
-//             /* parse a legacy octal sequence */
-//             uint32_t v;
-//             v = *p - '0';
-//             if (v > 7)
-//                 break;
-//             c = (c << 3) | v;
-//             p++;
-//             if (c >= 32)
-//                 break;
-//             v = *p - '0';
-//             if (v > 7)
-//                 break;
-//             c = (c << 3) | v;
-//             p++;
-//         }
-//         break;
-//     default:
-//         return -2;
-//     }
-//     *pp = p;
-//     return c;
-// }
+                var i: u32 = 0;
+                while(i < numChars) {
+                    const hexResult = cutils.from_hex(try reader.readByte());
+                    if (hexResult) |hex| {
+                        result = (result << 4) | hex;
+                        i += 1;
+                    } else |err| {
+                        return ParseEscapeError.MalformedEscape;
+                    }
+                }
+                if (result >= 0xd800 and 
+                    result < 0xdc00 and
+                    allow_utf16 == ParseUTF16Option.UTF16AndSurragatePairs and 
+                    try reader.peekByteAt(0) == '\\' and 
+                    try reader.peekByteAt(1) == 'u') {
+                    // /* convert an escaped surrogate pair into a
+                    //    unicode char */
+                    var extraChar: u32 = 0;
+                    i = 0;
+                    while(i < 4) {
+                        const hexResult = cutils.from_hex(try reader.peekByteAt(2 + i));
+                        if (hexResult) |hex| {
+                            extraChar = (extraChar << 4) | hex;
+                            i += 1;
+                        } else |err| {
+                            break;
+                        }
+                    }
+                    if (i == 4 and extraChar >= 0xdc00 and extraChar < 0xe000) {
+                        reader.advance(6);
+                        result = (((result & 0x3ff) << 10) | (extraChar & 0x3ff)) + 0x10000;
+                    }
+                }
+            }
+            break :blk result;
+        },
+        '0' ... '7' => blk: {
+            var result: u32 = @as(u32, char) - '0';
+            if (allow_utf16 == ParseUTF16Option.UTF16AndSurragatePairs) {
+                // /* only accept \0 not followed by digit */
+                if (result != 0 or is_digit(try reader.peekByte())) {
+                    return ParseEscapeError.MalformedEscape;
+                }
+            } else {
+                // /* parse a legacy octal sequence */
+                var octal: u32 = (try reader.peekByte()) - '0';
+                if (octal > 7) {
+                    break :blk result;
+                }
+                result = (result << 3) | octal;
+                reader.advance(1);
+                if (result >= 32) {
+                    break :blk result;
+                }
+                octal = (try reader.peekByte()) - '0';
+                if (octal > 7) {
+                    break :blk result;
+                }
+                result = (result << 3) | octal;
+                reader.advance(1);
+            }
+            break :blk result;
+        },
+        else => return ParseEscapeError.GeneralError
+    };
+}
+
+test "lre_parse_escape()" {
+    const a = testing.allocator;
+    {
+        // parse backspace char
+        var reader = Reader.fromSlice("\\b");
+        reader.advance(1);
+        
+        const result = try lre_parse_escape(&reader, ParseUTF16Option.NoUTF16);
+
+        testing.expect(result == '\x08');
+        testing.expect(reader.position == 2);
+    }
+    {
+        // parse newline
+        var reader = Reader.fromSlice("\\n");
+        reader.advance(1);
+        
+        const result = try lre_parse_escape(&reader, ParseUTF16Option.NoUTF16);
+
+        testing.expect(result == '\n');
+        testing.expect(reader.position == 2);
+    }
+    {
+        // parse tab
+        var reader = Reader.fromSlice("\\t");
+        reader.advance(1);
+        
+        const result = try lre_parse_escape(&reader, ParseUTF16Option.NoUTF16);
+
+        testing.expect(result == '\t');
+        testing.expect(reader.position == 2);
+    }
+    {
+        // parse vertical tab
+        var reader = Reader.fromSlice("\\v");
+        reader.advance(1);
+        
+        const result = try lre_parse_escape(&reader, ParseUTF16Option.NoUTF16);
+
+        testing.expect(result == '\x0B');
+        testing.expect(reader.position == 2);
+    }
+    {
+        // parse carriage return
+        var reader = Reader.fromSlice("\\r");
+        reader.advance(1);
+        
+        const result = try lre_parse_escape(&reader, ParseUTF16Option.NoUTF16);
+
+        testing.expect(result == '\r');
+        testing.expect(reader.position == 2);
+    }
+    {
+        // parse form feed
+        var reader = Reader.fromSlice("\\f");
+        reader.advance(1);
+        
+        const result = try lre_parse_escape(&reader, ParseUTF16Option.NoUTF16);
+
+        testing.expect(result == '\x0C');
+        testing.expect(reader.position == 2);
+    }
+    {
+        // parse UTF-16 escape
+        var reader = Reader.fromSlice("\\x11");
+        reader.advance(1);
+        
+        const result = try lre_parse_escape(&reader, ParseUTF16Option.UTF16);
+
+        testing.expect(result == '\x11');
+        testing.expect(reader.position == 4);
+    }
+    {
+        // parse UTF-16 escape
+        var reader = Reader.fromSlice("\\u1132");
+        reader.advance(1);
+        
+        const result = try lre_parse_escape(&reader, ParseUTF16Option.UTF16);
+
+        testing.expect(result == '\u{1132}');
+        testing.expect(reader.position == 6);
+    }
+    {
+        // parse UTF-16 surrogate pair escape
+        var reader = Reader.fromSlice("\\uD83D\\uDC69");
+        reader.advance(1);
+        
+        const result = try lre_parse_escape(&reader, ParseUTF16Option.UTF16AndSurragatePairs);
+
+        testing.expect(result == '\u{1F469}');
+        testing.expect(reader.position == 12);
+    }
+    {
+        // preserve UTF-16 surrogate pairs if not allowd to parse
+        var reader = Reader.fromSlice("\\uD83D\\uDC69");
+        reader.advance(1);
+        
+        const result = try lre_parse_escape(&reader, ParseUTF16Option.UTF16);
+
+        testing.expect(result == '\u{D83D}');
+        testing.expect(reader.position == 6);
+    }
+}
 
 // #ifdef CONFIG_ALL_UNICODE
 // /* XXX: we use the same chars for name and value */
