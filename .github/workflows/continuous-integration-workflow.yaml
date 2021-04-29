@@ -1,0 +1,16 @@
+name: Continuous Integration
+
+on: [push, pull_request]
+
+jobs:
+    test:
+        name: Build and Test
+        strategy:
+            matrix:
+                os: [ubuntu-latest, macOS-latest, windows-latest]
+        runs-on: ${{ matrix.os }}
+        steps:
+            - uses: actions/checkout@v1
+            - uses: goto-bus-stop/setup-zig@41ae19e72e21b9a1380e86ff9f058db709fc8fc6
+            - name: Run Tests
+              run: zig build test
