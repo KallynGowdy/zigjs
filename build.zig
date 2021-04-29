@@ -31,9 +31,21 @@ pub fn build(b: *std.build.Builder) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    var main_tests = b.addTest("src/zjs.zig");
+    const main_tests = b.addTest("src/zjs.zig");
     main_tests.setBuildMode(mode);
+
+    const cutils_tests = b.addTest("src/cutils.zig");
+    cutils_tests.setBuildMode(mode);
+    
+    const unicode_tests = b.addTest("src/libunicode.zig");
+    unicode_tests.setBuildMode(mode);
+
+    const regex_tests = b.addTest("src/libregexp.zig");
+    regex_tests.setBuildMode(mode);
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&main_tests.step);
+    test_step.dependOn(&cutils_tests.step);
+    test_step.dependOn(&unicode_tests.step);
+    test_step.dependOn(&regex_tests.step);
 }
