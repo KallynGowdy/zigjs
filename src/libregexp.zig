@@ -776,6 +776,17 @@ const Reader = struct {
         return byte;
     }
 
+    pub fn readBytes(self: *Self, amount: usize) ![] const u8 {
+        const finalPosition = self.position + amount;
+        if (finalPosition >= self.buffer.len) {
+            return Error.EndOfStream;
+        }
+
+        const result = self.buffer[0..finalPosition];
+        self.position += amount;
+        return result;
+    }
+
     pub fn peekByte(self: *Self) !u8 {
         if (self.position >= self.buffer.len) {
             return Error.EndOfStream;
@@ -817,6 +828,9 @@ const ParseError = error {
     UnexpectedOverflow,
     ExpectedClosingParenthesis,
     ExpectedClosingBrace,
+    ExpectedOpeningBrace,
+    UnknownUnicodePropertyName,
+    UnknownUnicodePropertyCode
 };
 
 // /* If allow_overflow is false, return -1 in case of
@@ -963,6 +977,9 @@ const ParseEscapeError = error {
 //    Return the unicode char and update *pp if recognized,
 //    return -1 if malformed escape,
 //    return -2 otherwise. */
+/// Parses a regex escape sequence which is in a character set.
+/// Returns the unicode character that was parsed.
+/// Accepts an option that is used to determine whether to parse UTF-16 escape sequences.
 fn lre_parse_escape(reader: *Reader, allow_utf16: ParseUTF16Option) !u32 {
     var char: u8 = try reader.readByte();
 
@@ -1172,50 +1189,90 @@ test "lre_parse_escape()" {
     }
 }
 
-// #ifdef CONFIG_ALL_UNICODE
 // /* XXX: we use the same chars for name and value */
-// static BOOL is_unicode_char(int c)
-// {
-//     return ((c >= '0' && c <= '9') ||
-//             (c >= 'A' && c <= 'Z') ||
-//             (c >= 'a' && c <= 'z') ||
-//             (c == '_'));
+// Determines if the given character is a valid part of a character class escape
+// when unicode is enabled.
+// fn is_unicode_char(char: u32) bool {
+//     return ((char >= '0' and char <= '9') or
+//             (char >= 'A' and char <= 'Z') or
+//             (char >= 'a' and char <= 'z') or
+//             (char == '_'));
 // }
 
-// static int parse_unicode_property(REParseState *s, CharRange *cr,
-//                                   const uint8_t **pp, BOOL is_inv)
-// {
-//     const uint8_t *p;
-//     char name[64], value[64];
-//     char *q;
-//     BOOL script_ext;
-//     int ret;
+// test "is_unicode_char()" {
+//     testing.expect(is_unicode_char('A'));
+//     testing.expect(is_unicode_char('a'));
+//     testing.expect(is_unicode_char('B'));
+//     testing.expect(is_unicode_char('b'));
+//     testing.expect(is_unicode_char('M'));
+//     testing.expect(is_unicode_char('m'));
+//     testing.expect(is_unicode_char('9'));
+//     testing.expect(is_unicode_char('0'));
+//     testing.expect(is_unicode_char('_'));
+// }
 
-//     p = *pp;
-//     if (*p != '{')
-//         return re_parse_error(s, "expecting '{' after \\p");
-//     p++;
-//     q = name;
-//     while (is_unicode_char(*p)) {
-//         if ((q - name) > sizeof(name) - 1)
-//             goto unknown_property_name;
-//         *q++ = *p++;
+// Parses a unicode character class and returns a character range that represents the class.
+// fn parse_unicode_property(s: *REParseState, reader: *Reader, is_inv: bool) !CharRange {
+//     const maxNameLength = 64;
+//     const maxValueLength = 64;
+//     var name: []const u8;
+//     var value: []const u8;
+//     // char *q;
+//     // whether script extensions should be included
+//     var script_ext: bool = false;
+//     var is_script: bool = false;
+//     // int ret;
+
+//     if ((try reader.peekByte()) != '{') {
+//         return ParseError.ExpectedOpenBrace;
 //     }
-//     *q = '\0';
-//     q = value;
-//     if (*p == '=') {
-//         p++;
-//         while (is_unicode_char(*p)) {
-//             if ((q - value) > sizeof(value) - 1)
-//                 return re_parse_error(s, "unknown unicode property value");
-//             *q++ = *p++;
+//     reader.advance(1);
+//     // q = name;
+//     var nameLen: usize = 0;
+//     while (is_unicode_char(try reader.peekByteAt(nameLen))) {
+//         if (nameLen > maxNameLength) {
+//             return ParseError.UnknownUnicodePropertyName;
+//         }
+//         nameLen += 1;
+//     }
+//     name = try reader.readBytes(nameLen);
+//     // *q = '\0';
+//     // q = value;
+//     var valueLen: usize = 0;
+//     if ((try reader.peekByte()) == '=') {
+//         reader.advance(1);
+//         while (is_unicode_char(try reader.peekByteAt(valueLen))) {
+//             if (valueLen > maxValueLength) {
+//                 return ParseError.UnknownUnicodePropertyCode;
+//             }
+//             valueLen += 1;
 //         }
 //     }
-//     *q = '\0';
-//     if (*p != '}')
-//         return re_parse_error(s, "expecting '}'");
-//     p++;
+//     value = try reader.readBytes(valueLen);
+
+//     if ((try reader.peekByte()) != '}') {
+//         return ParseError.ExpectedClosingBrace;
+//     }
+//     reader.advance(1);
 //     //    printf("name=%s value=%s\n", name, value);
+
+//     if (std.mem.eql(u8, name, "Script") or std.mem.eql(u8, name, "sc")) {
+//         script_ext = false;
+//         is_script = true;
+//     } else if (std.mem.eql(u8, name, "Script_Extensions") or std.mem.eql(u8, name, "scx")) {
+//         script_ext = true;
+//         is_script = true;
+//     } 
+    
+//     if (is_script) {
+
+//     } else if (std.mem.eql(u8, name, "General_Category") or std.mem.eql(u8, name, "gc")) {
+
+//     } else if (value.len == 0) {
+
+//     }
+
+
 
 //     if (!strcmp(name, "Script") || !strcmp(name, "sc")) {
 //         script_ext = FALSE;
@@ -1275,7 +1332,6 @@ test "lre_parse_escape()" {
 //  out_of_memory:
 //     return re_parse_out_of_memory(s);
 // }
-// #endif /* CONFIG_ALL_UNICODE */
 
 // /* return -1 if error otherwise the character or a class range
 //    (CLASS_RANGE_BASE). In case of class range, 'cr' is

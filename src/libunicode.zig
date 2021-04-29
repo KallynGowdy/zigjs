@@ -253,3 +253,153 @@ test "cr_union1()" {
         testing.expect(result.items[5] == 'z');
     }
 }
+
+//
+// unicode_find_name(const char *name_table, const char *name) []const u8 {
+//     const char *p, *r;
+//     int pos;
+//     size_t name_len, len;
+    
+//     p = name_table;
+//     pos = 0;
+//     name_len = strlen(name);
+//     while (*p) {
+//         for(;;) {
+//             r = strchr(p, ',');
+//             if (!r)
+//                 len = strlen(p);
+//             else
+//                 len = r - p;
+//             if (len == name_len && !memcmp(p, name, name_len))
+//                 return pos;
+//             p += len + 1;
+//             if (!r)
+//                 break;
+//         }
+//         pos++;
+//     }
+//     return -1;
+// }
+
+// /* 'cr' must be initialized and empty. Return 0 if OK, -1 if error, -2
+//    if not found */
+// Gets a new character range for the unicode characters that are in the given category.
+// pub fn unicode_script(script_name: []const u8, is_ext: bool) !CharRange {
+
+//     var script_idx: usize = 0;
+//     // int script_idx;
+
+
+//     const uint8_t *p, *p_end;
+//     uint32_t c, c1, b, n, v, v_len, i, type;
+//     CharRange cr1_s, *cr1;
+//     CharRange cr2_s, *cr2 = &cr2_s;
+//     BOOL is_common;
+    
+//     script_idx = unicode_find_name(unicode_script_name_table, script_name);
+//     if (script_idx < 0)
+//         return -2;
+//     /* Note: we remove the "Unknown" Script */
+//     script_idx += UNICODE_SCRIPT_Unknown + 1;
+        
+//     is_common = (script_idx == UNICODE_SCRIPT_Common ||
+//                  script_idx == UNICODE_SCRIPT_Inherited);
+//     if (is_ext) {
+//         cr1 = &cr1_s;
+//         cr_init(cr1, cr->mem_opaque, cr->realloc_func);
+//         cr_init(cr2, cr->mem_opaque, cr->realloc_func);
+//     } else {
+//         cr1 = cr;
+//     }
+
+//     p = unicode_script_table;
+//     p_end = unicode_script_table + countof(unicode_script_table);
+//     c = 0;
+//     while (p < p_end) {
+//         b = *p++;
+//         type = b >> 7;
+//         n = b & 0x7f;
+//         if (n < 96) {
+//         } else if (n < 112) {
+//             n = (n - 96) << 8;
+//             n |= *p++;
+//             n += 96;
+//         } else {
+//             n = (n - 112) << 16;
+//             n |= *p++ << 8;
+//             n |= *p++;
+//             n += 96 + (1 << 12);
+//         }
+//         if (type == 0)
+//             v = 0;
+//         else
+//             v = *p++;
+//         c1 = c + n + 1;
+//         if (v == script_idx) {
+//             if (cr_add_interval(cr1, c, c1))
+//                 goto fail;
+//         }
+//         c = c1;
+//     }
+
+//     if (is_ext) {
+//         /* add the script extensions */
+//         p = unicode_script_ext_table;
+//         p_end = unicode_script_ext_table + countof(unicode_script_ext_table);
+//         c = 0;
+//         while (p < p_end) {
+//             b = *p++;
+//             if (b < 128) {
+//                 n = b;
+//             } else if (b < 128 + 64) {
+//                 n = (b - 128) << 8;
+//                 n |= *p++;
+//                 n += 128;
+//             } else {
+//                 n = (b - 128 - 64) << 16;
+//                 n |= *p++ << 8;
+//                 n |= *p++;
+//                 n += 128 + (1 << 14);
+//             }
+//             c1 = c + n + 1;
+//             v_len = *p++;
+//             if (is_common) {
+//                 if (v_len != 0) {
+//                     if (cr_add_interval(cr2, c, c1))
+//                         goto fail;
+//                 }
+//             } else {
+//                 for(i = 0; i < v_len; i++) {
+//                     if (p[i] == script_idx) {
+//                         if (cr_add_interval(cr2, c, c1))
+//                             goto fail;
+//                         break;
+//                     }
+//                 }
+//             }
+//             p += v_len;
+//             c = c1;
+//         }
+//         if (is_common) {
+//             /* remove all the characters with script extensions */
+//             if (cr_invert(cr2))
+//                 goto fail;
+//             if (cr_op(cr, cr1->points, cr1->len, cr2->points, cr2->len,
+//                       CR_OP_INTER))
+//                 goto fail;
+//         } else {
+//             if (cr_op(cr, cr1->points, cr1->len, cr2->points, cr2->len,
+//                       CR_OP_UNION))
+//                 goto fail;
+//         }
+//         cr_free(cr1);
+//         cr_free(cr2);
+//     }
+//     return 0;
+//  fail:
+//     if (is_ext) {
+//         cr_free(cr1);
+//         cr_free(cr2);
+//     }
+//     goto fail;
+// }
