@@ -40,8 +40,12 @@ pub fn build(b: *std.build.Builder) void {
     const regex_tests = b.addTest("src/libregexp.zig");
     regex_tests.setBuildMode(mode);
 
+    const zigjs_tests = b.addTest("src/zigjs.zig");
+    zigjs_tests.setBuildMode(mode);
+
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&cutils_tests.step);
     test_step.dependOn(&unicode_tests.step);
     test_step.dependOn(&regex_tests.step);
+    test_step.dependOn(&zigjs_tests.step);
 }
