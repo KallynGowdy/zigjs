@@ -88,10 +88,9 @@ const JSError = enum {
     JS_URI_ERROR,
     JS_INTERNAL_ERROR,
     JS_AGGREGATE_ERROR,
-    
-    /// number of different NativeError objects
-    JS_NATIVE_ERROR_COUNT, 
 };
+
+const JS_NATIVE_ERROR_COUNT: u8 = 8;
 
 const JS_MAX_LOCAL_VARS: u32 = 65536;
 const JS_STACK_SIZE_MAX: u32 = 65536;
@@ -1177,7 +1176,28 @@ const JSGCObjectHeader = struct {
     // uint8_t dummy1; /* not used by the GC */
     // uint16_t dummy2; /* not used by the GC */
     // struct list_head link;
+
+    const Self = @This();
+
+    pub fn init(obj_type: JSGCObjectType) Self {
+        return Self{
+            .ref_count = 0,
+            .gc_obj_type = obj_type,
+            .mark = 0
+        };
+    }
+
+    pub fn add_ref(self: *Self) void {
+        self.ref_count += 1;
+    }
+
+    pub fn remove_ref(self: *Self) void {
+        self.ref_count -= 1;
+    }
 };
+
+const JSGCObjectHeaderList = std.TailQueue(JSGCObjectHeader);
+const JSGCObjectHeaderNode = JSGCObjectHeaderList.Node;
 
 const JSClassFinalizer = fn(runtime: *JSRuntime, val: JSValue) void;
 const JS_MarkFunc = fn(runtime: *JSRuntime, gp: *JSGCObjectHeader) void;
@@ -1218,7 +1238,7 @@ const JSClassGCMark = fn(runtime: *JSRuntime, val: JSValue, mark_func: *JS_MarkF
 //                            JS_MarkFunc *mark_func);
 
 const JSShape = struct {
-    header: JSGCObjectHeader,
+    header: JSGCObjectHeaderNode,
     // true if the shape is inserted in the shape hash table. If not,
     // JSShape.hash is not valid
     is_hashed: bool,
@@ -1262,12 +1282,119 @@ const JSShape = struct {
 };
 
 const JSContext = struct {
-    header: JSGCObjectHeader,
+    header: JSGCObjectHeaderNode,
     runtime: *JSRuntime,
     binary_object_count: u16,
     binary_object_size: u32,
 
-    array_shape: JSShape,
+    array_shape: ?*JSShape,
+    class_proto: std.ArrayList(JSValue),
+    function_proto: JSValue,
+    function_ctor: JSValue,
+    array_ctor: JSValue,
+    regexp_ctor: JSValue,
+    promise_ctor: JSValue,
+    native_error_proto: [JS_NATIVE_ERROR_COUNT]JSValue,
+    iterator_proto: JSValue,
+    async_iterator_proto: JSValue,
+    array_proto_values: JSValue,
+    throw_type_error: JSValue,
+    eval_obj: JSValue,
+    global_obj: JSValue,
+    global_var_obj: JSValue,
+
+    /// Used for random number generation
+    random_state: u64,
+
+    /// The number of cycles left before the interrupt handler should be called
+    interrupt_counter: i32,
+
+    loaded_modules: std.TailQueue(JSModuleDef),
+
+//     JSShape *array_shape;   /* initial shape for Array objects */
+
+//     JSValue *class_proto;
+//     JSValue function_proto;
+//     JSValue function_ctor;
+//     JSValue array_ctor;
+//     JSValue regexp_ctor;
+//     JSValue promise_ctor;
+//     JSValue native_error_proto[JS_NATIVE_ERROR_COUNT];
+//     JSValue iterator_proto;
+//     JSValue async_iterator_proto;
+//     JSValue array_proto_values;
+//     JSValue throw_type_error;
+//     JSValue eval_obj;
+
+//     JSValue global_obj; /* global object */
+//     JSValue global_var_obj; /* contains the global let/const definitions */
+
+//     uint64_t random_state;
+// #ifdef CONFIG_BIGNUM
+//     bf_context_t *bf_ctx;   /* points to rt->bf_ctx, shared by all contexts */
+//     JSFloatEnv fp_env; /* global FP environment */
+//     BOOL bignum_ext : 8; /* enable math mode */
+//     BOOL allow_operator_overloading : 8;
+// #endif
+//     /* when the counter reaches zero, JSRutime.interrupt_handler is called */
+//     int interrupt_counter;
+//     BOOL is_error_property_enabled;
+
+//     struct list_head loaded_modules; /* list of JSModuleDef.link */
+
+//     /* if NULL, RegExp compilation is not supported */
+//     JSValue (*compile_regexp)(JSContext *ctx, JSValueConst pattern,
+//                               JSValueConst flags);
+//     /* if NULL, eval is not supported */
+//     JSValue (*eval_internal)(JSContext *ctx, JSValueConst this_obj,
+//                              const char *input, size_t input_len,
+//                              const char *filename, int flags, int scope_idx);
+//     void *user_opaque;
+
+    const Self = @This();
+
+    pub fn init(runtime: *JSRuntime) !Self {
+        var self = Self{
+            .runtime = runtime,
+            .header = .{
+                .data = JSGCObjectHeader.init(.JS_GC_OBJ_TYPE_JS_CONTEXT)
+            },
+            .class_proto = std.ArrayList(JSValue).init(&runtime.allocator.allocator),
+            .loaded_modules = std.TailQueue(JSModuleDef){},
+            .binary_object_count = 0,
+            .binary_object_size = 0,
+            .array_shape = null,
+            .function_proto = JS_NULL,
+            .function_ctor = JS_NULL,
+            .array_ctor = JS_NULL,
+            .regexp_ctor = JS_NULL,
+            .promise_ctor = JS_NULL,
+            .native_error_proto = .{
+                JS_NULL,
+                JS_NULL,
+                JS_NULL,
+                JS_NULL,
+                JS_NULL,
+                JS_NULL,
+                JS_NULL,
+                JS_NULL,
+            },
+            .iterator_proto = JS_NULL,
+            .async_iterator_proto = JS_NULL,
+            .array_proto_values = JS_NULL,
+            .throw_type_error = JS_NULL,
+            .eval_obj = JS_NULL,
+            .global_obj = JS_NULL,
+            .global_var_obj = JS_NULL,
+            .random_state = 0,
+            .interrupt_counter = 10000,
+        };
+        return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.class_proto.deinit();
+    }
 };
 
 // struct JSContext {
@@ -1319,24 +1446,137 @@ const JSContext = struct {
 //     void *user_opaque;
 // };
 
+fn OpaqueCallback(comptime Handle: type, comptime Args: type, comptime R: type) type {
+    return struct {
+        callback: fn(handle: Handle, args: Args) R,
+        handle: Handle,
+    };
+}
+
+const JSInterruptCallback = OpaqueCallback(usize, *JSRuntime, bool);
+
+const JSHostPromiseRejectionTrackerArgs = struct {
+    ctx: *JSContext,
+    promise: JSValue,
+    reason: JSValue,
+    is_handled: bool,
+};
+const JSHostPromiseRejectionTracker = OpaqueCallback(usize, JSHostPromiseRejectionTrackerArgs, void);
+
+const JSJobFunc = fn(ctx: *JSContext, args: []JSValue) JSValue;
+const JSJobEntry = struct {
+    ctx: *JSContext,
+    jop_func: *JSJobFunc,
+    args: []JSValue,
+    // struct list_head link;
+    // JSContext *ctx;
+    // JSJobFunc *job_func;
+    // int argc;
+    // JSValue argv[0];
+};
+
+// typedef char *JSModuleNormalizeFunc(JSContext *ctx,
+                                    // const char *module_base_name,
+                                    // const char *module_name, void *opaque);
+const JSModuleNormalizeFuncArgs = struct {
+    ctx: *JSContext,
+    module_base_name: []const u8,
+    module_name: []const u8,
+};
+const JSModuleNormalizeFunc = OpaqueCallback(usize, JSModuleNormalizeFuncArgs, []u8);
+
+const JSModuleLoaderFuncArgs = struct {
+    ctx: *JSContext,
+    module_name: []const u8,
+};
+const JSModuleLoaderFunc = OpaqueCallback(usize, JSModuleLoaderFuncArgs, *JSModuleDef);
+
+const JSSharedArrayBufferFunctions = struct {
+    sab_alloc: fn(handle: *JSSharedArrayBufferFunctions, size: usize) []u8,
+    sab_free: fn(handle: *JSSharedArrayBufferFunctions, data: []u8) void,
+    sab_dup: fn(handle: *JSSharedArrayBufferFunctions, data: []u8) void,
+
+    const Self = @This();
+
+    pub fn alloc(self: *Self, size: usize) []u8 {
+        return self.sab_alloc(self, size);
+    }
+
+    pub fn free(data: []u8) void {
+        return self.sab_free(self, data);
+    }
+
+    pub fn dup(data: []u8) void {
+        return self.sab_dup(self, data);
+    }
+
+    // void *(*sab_alloc)(void *opaque, size_t size);
+    // void (*sab_free)(void *opaque, void *ptr);
+    // void (*sab_dup)(void *opaque, void *ptr);
+    // void *sab_opaque;
+};
+
+fn get_shape_hash(shape: *JSShape) u64 {
+    return shape.hash;
+}
+
+fn are_shapes_equal(first: *JSShape, second: *JSShape) bool {
+    return first.hash == second.hash and first.proto == second.proto;
+}
+
+const ShapeHashMap = std.HashMap(*JSShape, *JSShape, get_shape_hash, are_shapes_equal, std.hash_map.default_max_load_percentage);
+
+const JS_DEFAULT_STACK_SIZE: usize = (256 * 1024);
+
+
 const JSRuntime = struct {
     allocator: *JSAllocator,
     classes: std.ArrayList(JSClass),
-    current_exception: JSValue,
     
-    current_stack_frame: ?*JSStackFrame,
+    context_list: std.ArrayList(JSContext),
 
+    // Garbage Collection data
     gc_phase: JSGCPhase,
-    context_list: std.TailQueue(*JSContext),
-    // struct list_head context_list; /* list of JSContext.link */
-//     // /* list of JSGCObjectHeader.link. List of allocated GC objects (used
-//     //    by the garbage collector) */
-//     struct list_head gc_obj_list;
-//     // /* list of JSGCObjectHeader.link. Used during JS_FreeValueRT() */
-//     struct list_head gc_zero_ref_count_list; 
-//     struct list_head tmp_obj_list; /* used during GC */
-//     JSGCPhaseEnum gc_phase : 8;
-//     size_t malloc_gc_threshold;
+    gc_obj_list: JSGCObjectHeaderList,
+    gc_zero_ref_count_list: std.TailQueue(*JSGCObjectHeader),
+    tmp_obj_list: std.TailQueue(*JSGCObjectHeader),
+
+    /// The address of the top stack frame for the runtime
+    stack_top: usize,
+
+    /// The maximum stack size for the runtime
+    stack_size: usize,
+
+    /// The current JS stack frame
+    current_stack_frame: ?*JSStackFrame,
+    current_exception: JSValue,
+
+    /// Whether the runtime is currently processing a OutOfMemory error
+    in_out_of_memory: bool,
+
+    interrupt_handler: ?JSInterruptCallback,
+    host_promise_rejection_tracker: ?JSHostPromiseRejectionTracker,
+
+    job_list: std.TailQueue(JSJobEntry),
+
+    module_normalize_func: ?JSModuleNormalizeFunc,
+    module_loader_func: ?JSModuleLoaderFunc,
+
+    can_block: bool,
+
+    /// Used to allocate, free, and clone SharedArrayBuffers
+    sab_funcs: ?JSSharedArrayBufferFunctions,
+    shape_hash: ShapeHashMap,
+    
+// #ifdef CONFIG_BIGNUM
+//     bf_context_t bf_ctx;
+//     JSNumericOperations bigint_ops;
+//     JSNumericOperations bigfloat_ops;
+//     JSNumericOperations bigdecimal_ops;
+//     uint32_t operator_count;
+// #endif
+
+//     JSDebuggerInfo debugger_info;
 
     const Self = @This();
 
@@ -1347,12 +1587,60 @@ const JSRuntime = struct {
             .current_exception = JS_NULL,
             .current_stack_frame = null,
             .gc_phase = .JS_GC_PHASE_NONE,
-            .context_list = std.TailQueue(*JSContext){}
+            .context_list = std.ArrayList(JSContext).init(&allocator.allocator),
+            .gc_obj_list = JSGCObjectHeaderList{},
+            .gc_zero_ref_count_list = std.TailQueue(*JSGCObjectHeader){},
+            .tmp_obj_list = std.TailQueue(*JSGCObjectHeader){},
+            .job_list = std.TailQueue(JSJobEntry){},
+            .stack_top = @frameAddress(),
+            .stack_size = JS_DEFAULT_STACK_SIZE,
+            .in_out_of_memory = false,
+            .interrupt_handler = null,
+            .host_promise_rejection_tracker = null,
+            .module_normalize_func = null,
+            .module_loader_func = null,
+            .can_block = false,
+            .sab_funcs = null,
+            .shape_hash = ShapeHashMap.init(&allocator.allocator)
         };
     }
 
     pub fn deinit(self: *Self) void {
+        self.classes.deinit();
+        self.shape_hash.deinit();
+        self.context_list.deinit();
+    }
 
+    /// Creates a new JSContext and returns a pointer to it.
+    /// The runtime owns the context but you can signal to it that
+    /// you are no longer using the context by calling JSContext.deref().
+    /// Calling JSRuntime.deinit() will invalidate all contexts.
+    pub fn new_context(self: *Self) !*JSContext {
+        var context = try JSContext.init(self);
+        errdefer context.deinit();
+
+        var context_ptr = try self.context_list.addOne();
+        context_ptr.* = context;
+        errdefer self.context_list.pop();
+
+        self.add_gc_obj(&context_ptr.header);
+        errdefer self.remove_gc_obj(&context_ptr.header);
+        context_ptr.header.data.add_ref();
+
+        return context_ptr;
+    }
+
+    /// Adds the given GC Object header to the list of objects
+    /// that need GC.
+    pub fn add_gc_obj(self: *Self, node: *JSGCObjectHeaderNode) void {
+        node.data.mark = 0;
+        self.gc_obj_list.append(node);
+    }
+
+    /// Removes the given GC Object header from the list of objects that 
+    /// need GC.
+    pub fn remove_gc_obj(self: *Self, node: *JSGCObjectHeaderNode) void {
+        self.gc_obj_list.remove(node);
     }
 };
 
@@ -1363,6 +1651,36 @@ test "JSRuntime - init" {
 
         var runtime = JSRuntime.init(&gpa);
         defer runtime.deinit();
+    }
+}
+
+test "JSRuntime - deinit" {
+    {
+        var gpa = JSAllocator{};
+        errdefer _ = gpa.deinit();
+
+        var runtime = JSRuntime.init(&gpa);
+        errdefer runtime.deinit();
+
+        runtime.deinit();
+
+        testing.expect(!gpa.detectLeaks());
+    }
+}
+
+test "JSRuntime - new_context()" {
+    {
+        // Add context to the GC list
+        var gpa = JSAllocator{};
+        defer _ = gpa.deinit();
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var context = try runtime.new_context();
+
+        testing.expect(runtime.gc_obj_list.len == 1);
+        testing.expect(context.header.data.ref_count == 1);
     }
 }
 
