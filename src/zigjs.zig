@@ -112,9 +112,6 @@ const JSValueUnion = union {
     ptr: *JSPointerValue,
 };
 
-const JSClassID = u32;
-const JSAtom = u32;
-
 const JSTag = enum(i6) {
     // /* all tags with a reference count are negative */
     // JS_TAG_BIG_DECIMAL = -11,
@@ -141,7 +138,7 @@ const JSValue = union(JSTag) {
     JS_TAG_SYMBOL: JSAtom,
     JS_TAG_MODULE: *JSModuleDef,
     JS_TAG_STRING: *JSString,
-    JS_TAG_OBJECT: *JSValue,
+    JS_TAG_OBJECT: *JSObject,
     JS_TAG_FUNCTION_BYTECODE: *JSFunctionBytecode,
     JS_TAG_INT: i32,
     JS_TAG_BOOL: bool,
@@ -153,12 +150,413 @@ const JSValue = union(JSTag) {
     JS_TAG_FLOAT64: f64,
 };
 
+const JSAtom = enum {
+    JS_ATOM_NULL,
+
+    // /* Note: first atoms are considered as keywords in the parser */
+    JS_ATOM_null,
+    JS_ATOM_false,
+    JS_ATOM_true,
+    JS_ATOM_if,
+    JS_ATOM_else,
+    JS_ATOM_return,
+    JS_ATOM_var,
+    JS_ATOM_this,
+    JS_ATOM_delete,
+    JS_ATOM_void,
+    JS_ATOM_typeof,
+    JS_ATOM_new,
+    JS_ATOM_in,
+    JS_ATOM_instanceof,
+    JS_ATOM_do,
+    JS_ATOM_while,
+    JS_ATOM_for,
+    JS_ATOM_break,
+    JS_ATOM_continue,
+    JS_ATOM_switch,
+    JS_ATOM_case,
+    JS_ATOM_default,
+    JS_ATOM_throw,
+    JS_ATOM_try,
+    JS_ATOM_catch,
+    JS_ATOM_finally,
+    JS_ATOM_function,
+    JS_ATOM_debugger,
+    JS_ATOM_with,
+    // /* FutureReservedWord */
+    JS_ATOM_class,
+    JS_ATOM_const,
+    JS_ATOM_enum,
+    JS_ATOM_export,
+    JS_ATOM_extends,
+    JS_ATOM_import,
+    JS_ATOM_super,
+    // /* FutureReservedWords when parsing strict mode code */
+    JS_ATOM_implements,
+    JS_ATOM_interface,
+    JS_ATOM_let,
+    JS_ATOM_package,
+    JS_ATOM_private,
+    JS_ATOM_protected,
+    JS_ATOM_public,
+    JS_ATOM_static,
+    JS_ATOM_yield,
+    JS_ATOM_await,
+
+    // /* empty string */
+    JS_ATOM_empty_string,
+    // /* identifiers */
+    JS_ATOM_length,
+    JS_ATOM_fileName,
+    JS_ATOM_lineNumber,
+    JS_ATOM_message,
+    JS_ATOM_errors,
+    JS_ATOM_stack,
+    JS_ATOM_name,
+    JS_ATOM_toString,
+    JS_ATOM_toLocaleString,
+    JS_ATOM_valueOf,
+    JS_ATOM_eval,
+    JS_ATOM_prototype,
+    JS_ATOM_constructor,
+    JS_ATOM_configurable,
+    JS_ATOM_writable,
+    JS_ATOM_enumerable,
+    JS_ATOM_value,
+    JS_ATOM_get,
+    JS_ATOM_set,
+    JS_ATOM_of,
+    JS_ATOM___proto__,
+    JS_ATOM_undefined,
+    JS_ATOM_number,
+    JS_ATOM_boolean,
+    JS_ATOM_string,
+    JS_ATOM_object,
+    JS_ATOM_symbol,
+    JS_ATOM_integer,
+    JS_ATOM_unknown,
+    JS_ATOM_arguments,
+    JS_ATOM_callee,
+    JS_ATOM_caller,
+    JS_ATOM__eval_,
+    JS_ATOM__ret_,
+    JS_ATOM__var_,
+    JS_ATOM__with_,
+    JS_ATOM_lastIndex,
+    JS_ATOM_target,
+    JS_ATOM_index,
+    JS_ATOM_input,
+    JS_ATOM_defineProperties,
+    JS_ATOM_apply,
+    JS_ATOM_join,
+    JS_ATOM_concat,
+    JS_ATOM_split,
+    JS_ATOM_construct,
+    JS_ATOM_getPrototypeOf,
+    JS_ATOM_setPrototypeOf,
+    JS_ATOM_isExtensible,
+    JS_ATOM_preventExtensions,
+    JS_ATOM_has,
+    JS_ATOM_deleteProperty,
+    JS_ATOM_defineProperty,
+    JS_ATOM_getOwnPropertyDescriptor,
+    JS_ATOM_ownKeys,
+    JS_ATOM_add,
+    JS_ATOM_done,
+    JS_ATOM_next,
+    JS_ATOM_values,
+    JS_ATOM_source,
+    JS_ATOM_flags,
+    JS_ATOM_global,
+    JS_ATOM_unicode,
+    JS_ATOM_raw,
+    JS_ATOM_new_target,
+    JS_ATOM_this_active_func,
+    JS_ATOM_home_object,
+    JS_ATOM_computed_field,
+    JS_ATOM_static_computed_field,
+    JS_ATOM_class_fields_init,
+    JS_ATOM_brand,
+    JS_ATOM_hash_constructor,
+    JS_ATOM_as,
+    JS_ATOM_from,
+    JS_ATOM_meta,
+    JS_ATOM__default_,
+    JS_ATOM__star_,
+    JS_ATOM_Module,
+    JS_ATOM_then,
+    JS_ATOM_resolve,
+    JS_ATOM_reject,
+    JS_ATOM_promise,
+    JS_ATOM_proxy,
+    JS_ATOM_revoke,
+    JS_ATOM_async,
+    JS_ATOM_exec,
+    JS_ATOM_groups,
+    JS_ATOM_status,
+    JS_ATOM_reason,
+    JS_ATOM_globalThis,
+
+    // TODO: Support bignum
+    // #ifdef CONFIG_BIGNUM
+    // JS_ATOM_bigint,
+    // JS_ATOM_bigfloat,
+    // JS_ATOM_bigdecimal,
+    // JS_ATOM_roundingMode,
+    // JS_ATOM_maximumSignificantDigits,
+    // JS_ATOM_maximumFractionDigits,
+    // #endif
+
+    // TODO: Support atomics
+    // #ifdef CONFIG_ATOMICS
+    // JS_ATOM_not_equal,
+    // JS_ATOM_timed_out,
+    // JS_ATOM_ok,
+    // #endif
+
+    JS_ATOM_toJSON,
+
+    // /* class names */
+    JS_ATOM_Object,
+    JS_ATOM_Array,
+    JS_ATOM_Error,
+    JS_ATOM_Number,
+    JS_ATOM_String,
+    JS_ATOM_Boolean,
+    JS_ATOM_Symbol,
+    JS_ATOM_Arguments,
+    JS_ATOM_Math,
+    JS_ATOM_JSON,
+    JS_ATOM_Date,
+    JS_ATOM_Function,
+    JS_ATOM_GeneratorFunction,
+    JS_ATOM_ForInIterator,
+    JS_ATOM_RegExp,
+    JS_ATOM_ArrayBuffer,
+    JS_ATOM_SharedArrayBuffer,
+
+    // /* must keep same order as class IDs for typed arrays */
+    JS_ATOM_Uint8ClampedArray,
+    JS_ATOM_Int8Array,
+    JS_ATOM_Uint8Array,
+    JS_ATOM_Int16Array,
+    JS_ATOM_Uint16Array,
+    JS_ATOM_Int32Array,
+    JS_ATOM_Uint32Array,
+
+    // TODO: Support bignum
+    // #ifdef CONFIG_BIGNUM
+    // JS_ATOM_BigInt64Array,
+    // JS_ATOM_BigUint64Array,
+    // #endif
+    JS_ATOM_Float32Array,
+    JS_ATOM_Float64Array,
+    JS_ATOM_DataView,
+
+    // TODO: Support bignum
+    // #ifdef CONFIG_BIGNUM
+    // JS_ATOM_BigInt,
+    // JS_ATOM_BigFloat,
+    // JS_ATOM_BigFloatEnv,
+    // JS_ATOM_BigDecimal,
+    // JS_ATOM_OperatorSet,
+    // JS_ATOM_Operators,
+    // #endif
+
+    JS_ATOM_Map,
+    JS_ATOM_Set,
+    JS_ATOM_WeakMap,
+    JS_ATOM_WeakSet,
+    JS_ATOM_Map_Iterator,
+    JS_ATOM_Set_Iterator,
+    JS_ATOM_Array_Iterator,
+    JS_ATOM_String_Iterator,
+    JS_ATOM_RegExp_String_Iterator,
+    JS_ATOM_Generator,
+    JS_ATOM_Proxy,
+    JS_ATOM_Promise,
+    JS_ATOM_PromiseResolveFunction,
+    JS_ATOM_PromiseRejectFunction,
+    JS_ATOM_AsyncFunction,
+    JS_ATOM_AsyncFunctionResolve,
+    JS_ATOM_AsyncFunctionReject,
+    JS_ATOM_AsyncGeneratorFunction,
+    JS_ATOM_AsyncGenerator,
+    JS_ATOM_EvalError,
+    JS_ATOM_RangeError,
+    JS_ATOM_ReferenceError,
+    JS_ATOM_SyntaxError,
+    JS_ATOM_TypeError,
+    JS_ATOM_URIError,
+    JS_ATOM_InternalError,
+    // /* private symbols */
+    JS_ATOM_Private_brand,
+    // /* symbols */
+    JS_ATOM_Symbol_toPrimitive,
+    JS_ATOM_Symbol_iterator,
+    JS_ATOM_Symbol_match,
+    JS_ATOM_Symbol_matchAll,
+    JS_ATOM_Symbol_replace,
+    JS_ATOM_Symbol_search,
+    JS_ATOM_Symbol_split,
+    JS_ATOM_Symbol_toStringTag,
+    JS_ATOM_Symbol_isConcatSpreadable,
+    JS_ATOM_Symbol_hasInstance,
+    JS_ATOM_Symbol_species,
+    JS_ATOM_Symbol_unscopables,
+    JS_ATOM_Symbol_asyncIterator,
+
+    // TODO: Support bignum
+    // #ifdef CONFIG_BIGNUM
+    // JS_ATOM_Symbol_operatorSet,
+    // #endif
+};
+//     enum {
+//     JS_ATOM_NULL,
+// #define DEF(name, str) JS_ATOM_ ## name,
+// #include "quickjs-atom.h"
+// #undef DEF
+//     JS_ATOM_END,
+// };
+
 const JSSymbol = struct {
 
 };
 
-const JSModuleDef = struct {
+const  JSReqModuleEntry = struct{
+    module_name: JSAtom,
+    module: *JSModuleDef,
+    // JSAtom module_name;
+    // JSModuleDef *module; /* used using resolution */
+};
 
+const JSExportTypeEnum = enum {
+    JS_EXPORT_TYPE_LOCAL,
+    JS_EXPORT_TYPE_INDIRECT,
+};
+
+const JSExportEntryLocal = struct {
+    var_idx: u32,
+    var_ref: ?*JSVarRef,
+};
+
+const JSExportEntryValue = union(JSExportTypeEnum) {
+    JS_EXPORT_TYPE_LOCAL: JSExportEntryLocal,
+    JS_EXPORT_TYPE_INDIRECT: u32
+};
+
+const JSExportEntry = struct {
+    value: JSExportEntryValue,
+
+    /// "*" if export ns from. not used for local export
+    /// after compilation
+    local_name: JSAtom,
+
+    /// exported variable name
+    export_name: JSAtom,
+    // union {
+    //     struct {
+    //         int var_idx; /* closure variable index */
+    //         JSVarRef *var_ref; /* if != NULL, reference to the variable */
+    //     } local; /* for local export */
+    //     int req_module_idx; /* module for indirect export */
+    // } u;
+    // JSExportTypeEnum export_type;
+    // JSAtom local_name; /* '*' if export ns from. not used for local
+    //                       export after compilation */
+    // JSAtom export_name; /* exported variable name */
+};
+
+const JSStarExportEntry = struct {
+    /// in req_module_entries
+    req_module_idx: usize,
+};
+
+const JSImportEntry = struct {
+    /// closure variable index
+    var_idx: u32,
+
+    import_name: JSAtom,
+
+    /// in req_module_entries
+    req_module_idx: usize,
+
+    // int var_idx; /* closure variable index */
+    // JSAtom import_name;
+    // int req_module_idx; /* in req_module_entries */
+};
+
+const JSModuleInitFunc = fn(ctx: *JSContext, m: *JSModuleDef) u32;
+// typedef int JSModuleInitFunc(JSContext *ctx, JSModuleDef *m);
+
+const JSModuleDef = struct {
+    header: JSRefCountHeader,
+    module_name: JSAtom,
+
+    req_module_entries: std.ArrayList(JSReqModuleEntry),
+
+    export_entries: std.ArrayList(JSExportEntry),
+
+    star_export_entries: std.ArrayList(JSStarExportEntry),
+
+    import_entries: std.ArrayList(JSImportEntry),
+
+    module_ns: JSValue,
+
+    /// Only used for JS modules
+    func_obj: JSValue,
+
+    /// only used for C modules
+    init_func: JSModuleInitFunc,
+    resolved: bool,
+    func_created: bool,
+    instantiated: bool,
+    evaluated: bool,
+
+    /// temporary use during js_evaluate_module()
+    eval_mark: bool,
+
+    /// true if evaluation yielded an exception.
+    /// It is saved in eval_exception.
+    eval_has_exception: bool,
+    eval_exception: JSValue,
+
+    /// For import.meta
+    meta_obj: JSValue
+
+    // JSRefCountHeader header; /* must come first, 32-bit */
+    // JSAtom module_name;
+    // struct list_head link;
+
+    // JSReqModuleEntry *req_module_entries;
+    // int req_module_entries_count;
+    // int req_module_entries_size;
+
+    // JSExportEntry *export_entries;
+    // int export_entries_count;
+    // int export_entries_size;
+
+    // JSStarExportEntry *star_export_entries;
+    // int star_export_entries_count;
+    // int star_export_entries_size;
+
+    // JSImportEntry *import_entries;
+    // int import_entries_count;
+    // int import_entries_size;
+
+    // JSValue module_ns;
+    // JSValue func_obj; /* only used for JS modules */
+    // JSModuleInitFunc *init_func; /* only used for C modules */
+    // BOOL resolved : 8;
+    // BOOL func_created : 8;
+    // BOOL instantiated : 8;
+    // BOOL evaluated : 8;
+    // BOOL eval_mark : 8; /* temporary use during js_evaluate_module() */
+    // /* true if evaluation yielded an exception. It is saved in
+    //    eval_exception */
+    // BOOL eval_has_exception : 8; 
+    // JSValue eval_exception;
+    // JSValue meta_obj; /* for import.meta */
 };
 
 // const JSValue = struct {
@@ -167,22 +565,34 @@ const JSModuleDef = struct {
 // };
 
 const JSPropertyGetterSetter = struct {
-    getter: *JSObject,
-    setter: *JSObject,
+    getter: ?*JSObject,
+    setter: ?*JSObject,
 };
 
 const JSPropertyAutoInit = struct {
-    realm_and_id: u64,
+    realm: *JSContext,
+    init_id: JSAutoInitIDEnum,
     // o: opaque{},
 };
 
-const JSVarRef = opaque{};
+const JSAutoInitIDEnum = enum(u2) {
+    JS_AUTOINIT_ID_PROTOTYPE,
+    JS_AUTOINIT_ID_MODULE_NS,
+    JS_AUTOINIT_ID_PROP,
+};
 
-const JSProperty = union {
-    value: JSValue,
-    getset: JSPropertyGetterSetter,
-    var_ref: *JSVarRef,
-    init: JSPropertyAutoInit
+const JSPropertyType = enum {
+    VALUE,
+    GETSET,
+    VAR_REF,
+    AUTO_INIT
+};
+
+const JSProperty = union(JSPropertyType) {
+    VALUE: JSValue,
+    GETSET: JSPropertyGetterSetter,
+    VAR_REF: *JSVarRef,
+    AUTO_INIT: JSPropertyAutoInit
 };
 
 // typedef struct JSProperty {
@@ -203,6 +613,14 @@ const JSProperty = union {
 //     } u;
 // } JSProperty;
 
+const JSVarRef = struct {
+    header: JSGCObjectHeaderNode,
+    is_detached: bool,
+    is_arg: bool,
+    var_idx: u16,
+    pvalue: *JSValue,
+    value: JSValue,
+};
 
 // typedef struct JSVarRef {
 //     union {
@@ -692,8 +1110,16 @@ const JSCFunctionType = union(JSCFunctionEnum) {
 //         JSRegExp regexp;    /* JS_CLASS_REGEXP: 8/16 bytes */
 //         JSValue object_data;    /* for JS_SetObjectData(): 8/16/16 bytes */
 
+/// Calculates the hashcode for the given values.
+/// Used by the shape system to allow reusing memory when describing object metadata.
+/// See https://marcradziwill.com/blog/mastering-javascript-high-performance/
+fn shape_hash(h: u32, val: u32) u32 {
+    // uses same magic hash multiplier as the Linux kernel
+    return (h + val) * 0x9e370001;
+}
+
 const JSObject = struct {
-    header: JSGCObjectHeader,
+    header: JSGCObjectHeaderNode,
     extensible: bool,
 
     /// only used when freeing objects with cycles
@@ -709,14 +1135,44 @@ const JSObject = struct {
     /// used in JS_WriteObjectRec()
     tmp_mark: bool,
 
+    class_id: u16,
+
     shape: *JSShape,
     properties: []JSProperty,
 
     // TODO:
     // first_weak_ref: *JSMapRecord,
 
-    data: JSObjectData
+    data: JSObjectData,
+
+    const Self = @This();
+
+    /// Gets the initial shape hash for this object.
+    pub fn shape_initial_hash(self: *Self) u32 {
+        return shape_initial_hash(self);
+    }
+
+    /// Adds a reference to this object
+    /// and returns itself.
+    pub fn duplicate(self: *Self) *JSObject {
+        self.header.data.add_ref();
+        return self;
+    }
 };
+
+fn shape_initial_hash(shape: ?*JSObject) u32 {
+    const ptr: usize = if (shape) |self| @ptrToInt(self) else 0;
+    const hash = shape_hash(1, @truncate(u32, ptr));
+    if  (ptr > std.math.maxInt(u32)) {
+        return shape_hash(hash, @truncate(u32, ptr >> 32));
+    } 
+    return hash;
+    // uint32_t h;
+    // h = shape_hash(1, (uintptr_t)proto);
+    // if (sizeof(proto) > 4)
+    //     h = shape_hash(h, (uint64_t)(uintptr_t)proto >> 32);
+    // return h;
+}
 
 // struct JSObject {
 //     union {
@@ -978,6 +1434,48 @@ test "JS_NewFloat()" {
     }
 }
 
+// flags for object properties
+const JS_PROP_CONFIGURABLE: u32 = (1 << 0);
+const JS_PROP_WRITABLE: u32 = (1 << 1);
+const JS_PROP_ENUMERABLE: u32 = (1 << 2);
+const JS_PROP_C_W_E: u32 = (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE | JS_PROP_ENUMERABLE);
+
+/// used internally in Arrays
+const JS_PROP_LENGTH: u32 = (1 << 3);
+
+/// mask for NORMAL, GETSET, VARREF, AUTOINIT
+const JS_PROP_TMASK: u32 = (3 << 4);
+const JS_PROP_NORMAL: u32 = (0 << 4);
+const JS_PROP_GETSET: u32 = (1 << 4);
+
+/// used internally
+const JS_PROP_VARREF: u32 = (2 << 4);
+
+/// used internally
+const JS_PROP_AUTOINIT: u32 = (3 << 4);
+
+// /* flags for JS_DefineProperty */
+const JS_PROP_HAS_SHIFT: u32 = 8;
+const JS_PROP_HAS_CONFIGURABLE: u32 = (1 << 8);
+const JS_PROP_HAS_WRITABLE: u32 = (1 << 9);
+const JS_PROP_HAS_ENUMERABLE: u32 = (1 << 10);
+const JS_PROP_HAS_GET: u32 = (1 << 11);
+const JS_PROP_HAS_SET: u32 = (1 << 12);
+const JS_PROP_HAS_VALUE: u32 = (1 << 13);
+
+// /* throw an exception if false would be returned
+//    (JS_DefineProperty/JS_SetProperty) */
+const JS_PROP_THROW: u32 = (1 << 14);
+// /* throw an exception if false would be returned in strict mode
+//    (JS_SetProperty) */
+const JS_PROP_THROW_STRICT: u32 =(1 << 15);
+
+/// internal use
+const JS_PROP_NO_ADD: u32 = (1 << 16);
+
+/// internal use
+const JS_PROP_NO_EXOTIC: u32 =(1 << 17);
+
 const JS_NULL = JSValue{
     .JS_TAG_NULL = {}
 };
@@ -1096,7 +1594,7 @@ const JSStackFrame = struct {
     var_buf: []JSValue,
     current_program_counter: u8,
     js_mode: JSMode,
-    cur_sp: *JSValue,
+    cur_sp: ?*JSValue,
 };
 
 // typedef struct JSStackFrame {
@@ -1121,7 +1619,7 @@ const JSClass = struct {
     class_id: u32,
     class_name: JSAtom,
     finalizer: *JSClassFinalizer,
-    gc_mark: *JSClassGCMark,
+    gc_mark: ?*JSClassGCMark,
     call: *JSClassCall,
     exotic: ?*const JSClassExoticMethods
 
@@ -1200,8 +1698,7 @@ const JSGCObjectHeaderList = std.TailQueue(JSGCObjectHeader);
 const JSGCObjectHeaderNode = JSGCObjectHeaderList.Node;
 
 const JSClassFinalizer = fn(runtime: *JSRuntime, val: JSValue) void;
-const JS_MarkFunc = fn(runtime: *JSRuntime, gp: *JSGCObjectHeader) void;
-const JSClassGCMark = fn(runtime: *JSRuntime, val: JSValue, mark_func: *JS_MarkFunc) void;
+const JSClassGCMark = fn(runtime: *JSRuntime, val: JSValue, mark_func: MarkFunc) void;
 
 // typedef struct JSClassExoticMethods {
 //     /* Return -1 if exception (can only happen in case of Proxy object),
@@ -1237,6 +1734,15 @@ const JSClassGCMark = fn(runtime: *JSRuntime, val: JSValue, mark_func: *JS_MarkF
 // typedef void JSClassGCMark(JSRuntime *rt, JSValueConst val,
 //                            JS_MarkFunc *mark_func);
 
+const JSShapeProperty = struct {
+    hash_next: u32,
+    flags: u32,
+    atom: JSAtom,
+    // uint32_t hash_next : 26; /* 0 if last in list */
+    // uint32_t flags : 6;   /* JS_PROP_XXX */
+    // JSAtom atom; /* JS_ATOM_NULL = free property entry */
+};
+
 const JSShape = struct {
     header: JSGCObjectHeaderNode,
     // true if the shape is inserted in the shape hash table. If not,
@@ -1251,15 +1757,12 @@ const JSShape = struct {
     /// current hash value
     hash: u32,
     prop_hash_mask: u32,
-    /// allocated properties
-    prop_size: u32,
+
     /// includes deleted properties
-    prop_count: u32,
     deleted_prop_count: u32,
 
-    proto: *JSObject,
-
-
+    proto: ?*JSObject,
+    properties: std.ArrayList(JSShapeProperty),
 
     // uint32_t prop_hash_end[0]; /* hash table of size hash_mask + 1
     //                               before the start of the structure. */
@@ -1279,7 +1782,110 @@ const JSShape = struct {
     // JSShape *shape_hash_next; /* in JSRuntime.shape_hash[h] list */
     // JSObject *proto;
     // JSShapeProperty prop[0]; /* prop_size elements */
+
+    const Self = @This();
+
+    /// Creates a new JSShape for the given context and prototype.
+    /// Returns a pointer to the newly allocated shape.
+    /// The context owns the new shape.
+    pub fn initFromProto(ctx: *JSContext, proto: ?*JSObject) !*Self {
+        return Self.initFromProtoWithSizes(ctx, proto, 4, 2);
+    }
+
+    /// Creates a new JSShape for the given context and prototype.
+    /// Returns a pointer to the newly allocated shape.
+    /// The context owns the new shape.
+    pub fn initFromProtoWithSizes(ctx: *JSContext, proto: ?*JSObject, hash_size: u32, prop_size: u32) !*Self {
+        const self = try ctx.runtime.allocator.allocator.create(Self);
+        errdefer ctx.runtime.allocator.allocator.destroy(self);
+        self.header = .{
+            .data = JSGCObjectHeader.init(.JS_GC_OBJ_TYPE_SHAPE)
+        };
+        self.header.data.add_ref();
+        ctx.runtime.add_gc_obj(&self.header);
+        self.proto = if (proto) |p| p.duplicate() else null;
+        self.prop_hash_mask = hash_size - 1;
+        self.deleted_prop_count = 0;
+        self.properties = try std.ArrayList(JSShapeProperty).initCapacity(&ctx.runtime.allocator.allocator, prop_size);
+        self.hash = shape_initial_hash(self.proto);
+        self.is_hashed = true;
+        self.has_small_array_index = false;
+        try ctx.runtime.add_shape(self);
+
+        return self;
+
+
+        // JSRuntime *rt = ctx->rt;
+        // void *sh_alloc;
+        // JSShape *sh;
+
+        // /* resize the shape hash table if necessary */
+        // if (2 * (rt->shape_hash_count + 1) > rt->shape_hash_size) {
+        //     resize_shape_hash(rt, rt->shape_hash_bits + 1);
+        // }
+
+        // sh_alloc = js_malloc(ctx, get_shape_size(hash_size, prop_size));
+        // if (!sh_alloc)
+        //     return NULL;
+        // sh = get_shape_from_alloc(sh_alloc, hash_size);
+        // sh->header.ref_count = 1;
+        // add_gc_object(rt, &sh->header, JS_GC_OBJ_TYPE_SHAPE);
+        // if (proto)
+        //     JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, proto));
+        // sh->proto = proto;
+        // memset(sh->prop_hash_end - hash_size, 0, sizeof(sh->prop_hash_end[0]) *
+        //     hash_size);
+        // sh->prop_hash_mask = hash_size - 1;
+        // sh->prop_size = prop_size;
+        // sh->prop_count = 0;
+        // sh->deleted_prop_count = 0;
+        
+        // /* insert in the hash table */
+        // sh->hash = shape_initial_hash(proto);
+        // sh->is_hashed = TRUE;
+        // sh->has_small_array_index = FALSE;
+        // js_shape_hash_link(ctx->rt, sh);
+        // return sh;
+    }
+
+    /// Releases and frees resources that this shape owns.
+    pub fn deinit(self: *Self) void {
+        self.properties.deinit();
+    }
+
+    /// Adds a reference to this shape
+    /// and returns itself.
+    pub fn duplicate(self: *Self) *JSShape {
+        self.header.data.add_ref();
+        return self;
+    }
 };
+
+test "JSShape - initFromProto()" {
+    { // null prototype
+        var gpa = JSAllocator{};
+        defer std.testing.expect(!gpa.deinit());
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var context = try runtime.new_context();
+        defer context.deinit();
+
+        var shape = try JSShape.initFromProto(context, null);
+
+        testing.expect(shape.properties.capacity == 2);
+        testing.expect(shape.properties.items.len == 0);
+        testing.expect(shape.header.data.ref_count == 1);
+        testing.expect(shape.is_hashed == true);
+        testing.expect(shape.deleted_prop_count == 0);
+        testing.expect(shape.has_small_array_index == false);
+        testing.expect(shape.proto == null);
+        
+        var found = runtime.shape_hash.get(shape.hash);
+        testing.expect(found.? == shape);
+    }
+}
 
 const JSContext = struct {
     header: JSGCObjectHeaderNode,
@@ -1389,13 +1995,148 @@ const JSContext = struct {
             .random_state = 0,
             .interrupt_counter = 10000,
         };
+
+        // add_intrinsic_basic_objects(self);
+
         return self;
     }
 
     pub fn deinit(self: *Self) void {
         self.class_proto.deinit();
     }
+
+    // pub fn add_intrinsic_basic_objects(self: *Self) void {
+
+    // }
+
+    /// Creates a new value from the given prototype with the given class.
+    /// This can be useful for creating objects/arrays and other primitive values with a specific prototype.
+    /// Returns a value that points to the created value.
+    pub fn new_object_proto_class(self: *Self, proto_val: JSValue, class: JSClassEnum) JSValue {
+        var proto: *JSObject = if (proto_val == .JS_CLASS_OBJECT) |obj| obj else unreachable;
+        var foundShape: ?*JSShape = self.runtime.find_shape_for_proto(proto);
+        var shape = if (foundShape) |shape| shape.duplicate() else try JSShape.initFromProto(self, proto);
+        return self.new_object_from_shape(shape, class);
+
+    //     JSShape *sh;
+    // JSObject *proto;
+
+    // proto = get_proto_obj(proto_val);
+    // sh = find_hashed_shape_proto(ctx->rt, proto);
+    // if (likely(sh)) {
+    //     sh = js_dup_shape(sh);
+    // } else {
+    //     sh = js_new_shape(ctx, proto);
+    //     if (!sh)
+    //         return JS_EXCEPTION;
+    // }
+    // return JS_NewObjectFromShape(ctx, sh, class_id);
+    }
+
+    /// Creates a new object from the given prototype.
+    /// Returns a value that points to the created object.
+    pub fn new_object_proto(self: *Self, proto_val: JSValue) JSValue {
+        return self.new_object_proto_class(proto_val, .JS_CLASS_OBJECT);
+    }
+
+    /// Creates a new object from the given shape and class.
+    /// Returns a value that points to the new object.
+    pub fn new_object_from_shape(self: *Self, shape: *JSShape, class: JSClassEnum) JSValue {
+
+        self.runtime.trigger_gc();
+
+    //     JSObject *p;
+
+    //     js_trigger_gc(ctx->rt, sizeof(JSObject));
+    //     p = js_malloc(ctx, sizeof(JSObject));
+    //     if (unlikely(!p))
+    //         goto fail;
+    //     p->class_id = class_id;
+    //     p->extensible = TRUE;
+    //     p->free_mark = 0;
+    //     p->is_exotic = 0;
+    //     p->fast_array = 0;
+    //     p->is_constructor = 0;
+    //     p->is_uncatchable_error = 0;
+    //     p->tmp_mark = 0;
+    //     p->first_weak_ref = NULL;
+    //     p->u.opaque = NULL;
+    //     p->shape = sh;
+    //     p->prop = js_malloc(ctx, sizeof(JSProperty) * sh->prop_size);
+    //     if (unlikely(!p->prop)) {
+    //         js_free(ctx, p);
+    //     fail:
+    //         js_free_shape(ctx->rt, sh);
+    //         return JS_EXCEPTION;
+    //     }
+
+    //     switch(class_id) {
+    //     case JS_CLASS_OBJECT:
+    //         break;
+    //     case JS_CLASS_ARRAY:
+    //         {
+    //             JSProperty *pr;
+    //             p->is_exotic = 1;
+    //             p->fast_array = 1;
+    //             p->u.array.u.values = NULL;
+    //             p->u.array.count = 0;
+    //             p->u.array.u1.size = 0;
+    //             /* the length property is always the first one */
+    //             if (likely(sh == ctx->array_shape)) {
+    //                 pr = &p->prop[0];
+    //             } else {
+    //                 /* only used for the first array */
+    //                 /* cannot fail */
+    //                 pr = add_property(ctx, p, JS_ATOM_length,
+    //                                 JS_PROP_WRITABLE | JS_PROP_LENGTH);
+    //             }
+    //             pr->u.value = JS_NewInt32(ctx, 0);
+    //         }
+    //         break;
+    //     case JS_CLASS_C_FUNCTION:
+    //         p->prop[0].u.value = JS_UNDEFINED;
+    //         break;
+    //     case JS_CLASS_ARGUMENTS:
+    //     case JS_CLASS_UINT8C_ARRAY ... JS_CLASS_FLOAT64_ARRAY:
+    //         p->is_exotic = 1;
+    //         p->fast_array = 1;
+    //         p->u.array.u.ptr = NULL;
+    //         p->u.array.count = 0;
+    //         break;
+    //     case JS_CLASS_DATAVIEW:
+    //         p->u.array.u.ptr = NULL;
+    //         p->u.array.count = 0;
+    //         break;
+    //     case JS_CLASS_NUMBER:
+    //     case JS_CLASS_STRING:
+    //     case JS_CLASS_BOOLEAN:
+    //     case JS_CLASS_SYMBOL:
+    //     case JS_CLASS_DATE:
+    // #ifdef CONFIG_BIGNUM
+    //     case JS_CLASS_BIG_INT:
+    //     case JS_CLASS_BIG_FLOAT:
+    //     case JS_CLASS_BIG_DECIMAL:
+    // #endif
+    //         p->u.object_data = JS_UNDEFINED;
+    //         goto set_exotic;
+    //     case JS_CLASS_REGEXP:
+    //         p->u.regexp.pattern = NULL;
+    //         p->u.regexp.bytecode = NULL;
+    //         goto set_exotic;
+    //     default:
+    //     set_exotic:
+    //         if (ctx->rt->class_array[class_id].exotic) {
+    //             p->is_exotic = 1;
+    //         }
+    //         break;
+    //     }
+    //     p->header.ref_count = 1;
+    //     add_gc_object(ctx->rt, &p->header, JS_GC_OBJ_TYPE_JS_OBJECT);
+    //     return JS_MKPTR(JS_TAG_OBJECT, p);
+    }
 };
+
+
 
 // struct JSContext {
 //     JSGCObjectHeader header; /* must come first */
@@ -1516,18 +2257,36 @@ const JSSharedArrayBufferFunctions = struct {
     // void *sab_opaque;
 };
 
-fn get_shape_hash(shape: *JSShape) u64 {
-    return shape.hash;
+fn get_shape_hash(hash: u32) u64 {
+    return @intCast(u64, hash);
 }
 
-fn are_shapes_equal(first: *JSShape, second: *JSShape) bool {
-    return first.hash == second.hash and first.proto == second.proto;
+fn are_shapes_equal(first: u32, second: u32) bool {
+    return true;
 }
 
-const ShapeHashMap = std.HashMap(*JSShape, *JSShape, get_shape_hash, are_shapes_equal, std.hash_map.default_max_load_percentage);
+const ShapeHashMap = std.HashMap(u32, *JSShape, get_shape_hash, are_shapes_equal, std.hash_map.default_max_load_percentage);
 
 const JS_DEFAULT_STACK_SIZE: usize = (256 * 1024);
 
+const MarkFunc = fn(runtime: *JSRuntime, gp: *JSGCObjectHeader) void;
+
+
+fn gc_decref_child(runtime: *JSRuntime, header: *JSGCObjectHeaderNode) void {
+    std.debug.assert(header.ref_count > 0);
+    header.ref_count -= 1;
+    if (header.ref_count == 0 and header.mark == 1) {
+        // Remove from the gc list and add to the temp obj list
+        runtime.gc_obj_list.remove(header);
+        runtime.tmp_obj_list.append(header);
+    }
+    // assert(p->ref_count > 0);
+    // p->ref_count--;
+    // if (p->ref_count == 0 && p->mark == 1) {
+    //     list_del(&p->link);
+    //     list_add_tail(&p->link, &rt->tmp_obj_list);
+    // }
+}
 
 const JSRuntime = struct {
     allocator: *JSAllocator,
@@ -1567,6 +2326,10 @@ const JSRuntime = struct {
     /// Used to allocate, free, and clone SharedArrayBuffers
     sab_funcs: ?JSSharedArrayBufferFunctions,
     shape_hash: ShapeHashMap,
+
+    /// The threshold that should be used to trigger garbage collection.
+    /// This is automatically adjusted whenever garbage collection is triggered.
+    gc_threshold: usize,
     
 // #ifdef CONFIG_BIGNUM
 //     bf_context_t bf_ctx;
@@ -1601,14 +2364,20 @@ const JSRuntime = struct {
             .module_loader_func = null,
             .can_block = false,
             .sab_funcs = null,
-            .shape_hash = ShapeHashMap.init(&allocator.allocator)
+            .shape_hash = ShapeHashMap.init(&allocator.allocator),
+            .gc_threshold = 256 * 1024
         };
     }
 
     pub fn deinit(self: *Self) void {
         self.classes.deinit();
-        self.shape_hash.deinit();
         self.context_list.deinit();
+        var shape_it = self.shape_hash.iterator();
+        while(shape_it.next()) |kv| {
+            kv.value.deinit();
+            self.allocator.allocator.destroy(kv.value);
+        }
+        self.shape_hash.deinit();
     }
 
     /// Creates a new JSContext and returns a pointer to it.
@@ -1641,6 +2410,435 @@ const JSRuntime = struct {
     /// need GC.
     pub fn remove_gc_obj(self: *Self, node: *JSGCObjectHeaderNode) void {
         self.gc_obj_list.remove(node);
+    }
+
+    /// Finds a hashed empty shape that matches the given prototype.
+    /// Returns null if not found.
+    pub fn find_shape_for_proto(self: *Self, proto: *JSObject) ?*JSShape {
+        var hash: u32 = proto.shape_initial_hash();
+        return self.shape_hash.get(hash);
+    }
+
+    /// Adds the given shape to the shape hash table.
+    /// Once added, this context owns the shape.
+    pub fn add_shape(self: *Self, shape: *JSShape) !void {
+        return self.shape_hash.put(shape.hash, shape);
+    }
+
+    /// Runs a Garbage Collection pass if there is more allocated space
+    /// than the configured limit. Takes an extra space parameter that can be used
+    /// to determine if GC should be run before some space is allocated to try to prevent
+    /// exceeding memory limits.
+    pub fn trigger_gc(self: *Self, extra_space: usize) void {
+        const force_gc = (self.allocator.total_requested_bytes + extra_space) > self.gc_threshold;
+
+        if (force_gc) {
+            self.run_gc();
+
+            // Adjust the gc threshold based on how much memory is left
+            self.gc_threshold = self.allocator.total_requested_bytes + self.allocator.total_requested_bytes >> 1;
+        }
+
+//         BOOL force_gc;
+// #ifdef FORCE_GC_AT_MALLOC
+//     force_gc = TRUE;
+// #else
+//     force_gc = ((rt->malloc_state.malloc_size + size) >
+//                 rt->malloc_gc_threshold);
+// #endif
+//     if (force_gc) {
+// #ifdef DUMP_GC
+//         printf("GC: size=%" PRIu64 "\n",
+//                (uint64_t)rt->malloc_state.malloc_size);
+// #endif
+//         JS_RunGC(rt);
+//         rt->malloc_gc_threshold = rt->malloc_state.malloc_size +
+//             (rt->malloc_state.malloc_size >> 1);
+//     }
+    }
+
+    /// Runs a garbage collection pass.
+    fn run_gc(self: *Self) void {
+
+        self.gc_deref();
+
+        // /* decrement the reference of the children of each object. mark =
+        // 1 after this pass. */
+        // gc_decref(rt);
+
+        // /* keep the GC objects with a non zero refcount and their childs */
+        // gc_scan(rt);
+
+        // /* free the GC objects in a cycle */
+        // gc_free_cycles(rt);
+    }
+
+    /// Decrements each GC object's refcount by 1 and sets their mark to 1.
+    fn gc_deref(self: *Self) void {
+        var list_obj: ?*JSGCObjectHeaderNode = self.gc_obj_list.first;
+
+        // decrement the refcount of all the children of all the GC
+        // objects and move the GC objects with zero refcount to
+        // tmp_obj_list
+        while(list_obj) |obj| {
+            std.deug.assert(obj.data.mark == 0);
+            self.mark_children(obj, gc_deref_child);
+            obj.data.mark = 1;
+            if (obj.data.ref_count == 0) {
+                self.gc_obj_list.remove(obj);
+                self.tmp_obj_list.append(obj);
+            }
+            list_obj = obj.next;
+        }
+
+        // struct list_head *el, *el1;
+        // JSGCObjectHeader *p;
+        
+        // init_list_head(&rt->tmp_obj_list);
+
+        // /* decrement the refcount of all the children of all the GC
+        // objects and move the GC objects with zero refcount to
+        // tmp_obj_list */
+        // list_for_each_safe(el, el1, &rt->gc_obj_list) {
+        //     p = list_entry(el, JSGCObjectHeader, link);
+        //     assert(p->mark == 0);
+        //     mark_children(rt, p, gc_decref_child);
+        //     p->mark = 1;
+        //     if (p->ref_count == 0) {
+        //         list_del(&p->link);
+        //         list_add_tail(&p->link, &rt->tmp_obj_list);
+        //     }
+        // }
+    }
+
+    fn mark_children(self: *Self, gp: *JSGCObjectHeaderNode, mark_func: MarkFunc) void {
+        const gc_obj = get_gc_object(gp);
+        switch(gc_obj) {
+            .JS_GC_OBJ_TYPE_JS_OBJECT => |obj| {
+                const shape = obj.shape;
+                mark_func(self, &shape.header.data);
+
+                // mark all the fields
+                for(shape.properties.items) |*propertyShape, i| {
+                    var prop = &obj.properties[i];
+                    if (propertyShape.atom != .JS_ATOM_NULL) {
+                        if (propertyShape.flags & JS_PROP_TMASK != 0) {
+                            switch(prop) {
+                                .GETSET => |*getset| {
+                                    if (getset.getter) |getter| {
+                                        mark_func(self, &getter.header.data);
+                                    }
+                                    if (getset.setter) |setter| {
+                                        mark_func(self, &setter.header.data);
+                                    }
+                                    break;
+                                },
+                                .VAR_REF => |var_ref| {
+                                    if (var_ref.is_detached) {
+                                        // Note: the tag order does not matter
+                                        // provided it is a GC object
+                                        mark_func(self, &var_ref.header.data);
+                                    }
+                                    break;
+                                },
+                                .AUTO_INIT => |*init| {
+                                    self.autoinit_mark(init, mark_func);
+                                }
+                            }
+                        } else {
+                            self.mark_value(prop.value, mark_func);
+                        }
+                    }
+                }
+
+                switch(obj.data) {
+                    .JS_CLASS_OBJECT => |obj_data| {
+                        var gc_mark: ?*JSClassGCMark = self.classes[obj.class_id].gc_mark;
+                        if (gc_mark) |mark| {
+                            mark(self, JSValue{ .JS_TAG_OBJECT = obj }, mark_func);
+                        }
+                    },
+                }
+                //{
+        //             JSObject *p = (JSObject *)gp;
+        //             JSShapeProperty *prs;
+        //             JSShape *sh;
+        //             int i;
+        //             sh = p->shape;
+        //             mark_func(rt, &sh->header);
+        //             /* mark all the fields */
+        //             prs = get_shape_prop(sh);
+        //             for(i = 0; i < sh->prop_count; i++) {
+        //                 JSProperty *pr = &p->prop[i];
+        //                 if (prs->atom != JS_ATOM_NULL) {
+        //                     if (prs->flags & JS_PROP_TMASK) {
+        //                         if ((prs->flags & JS_PROP_TMASK) == JS_PROP_GETSET) {
+        //                             if (pr->u.getset.getter)
+        //                                 mark_func(rt, &pr->u.getset.getter->header);
+        //                             if (pr->u.getset.setter)
+        //                                 mark_func(rt, &pr->u.getset.setter->header);
+        //                         } else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_VARREF) {
+        //                             if (pr->u.var_ref->is_detached) {
+        //                                 /* Note: the tag does not matter
+        //                                 provided it is a GC object */
+        //                                 mark_func(rt, &pr->u.var_ref->header);
+        //                             }
+        //                         } else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_AUTOINIT) {
+        //                             js_autoinit_mark(rt, pr, mark_func);
+        //                         }
+        //                     } else {
+        //                         JS_MarkValue(rt, pr->u.value, mark_func);
+        //                     }
+        //                 }
+        //                 prs++;
+        //             }
+
+        //             if (p->class_id != JS_CLASS_OBJECT) {
+        //                 JSClassGCMark *gc_mark;
+        //                 gc_mark = rt->class_array[p->class_id].gc_mark;
+        //                 if (gc_mark)
+        //                     gc_mark(rt, JS_MKPTR(JS_TAG_OBJECT, p), mark_func);
+        //             }
+        //         }
+                break;
+            },
+            .JS_GC_OBJ_TYPE_FUNCTION_BYTECODE => |func| {
+                // TODO:
+                //         /* the template objects can be part of a cycle */
+        //         {
+        //             JSFunctionBytecode *b = (JSFunctionBytecode *)gp;
+        //             int i;
+        //             for(i = 0; i < b->cpool_count; i++) {
+        //                 JS_MarkValue(rt, b->cpool[i], mark_func);
+        //             }
+        //             if (b->realm)
+        //                 mark_func(rt, &b->realm->header);
+        //         }
+                break;
+            },
+            .JS_GC_OBJ_TYPE_VAR_REF => |ref| {
+                std.debug.assert(ref.is_detached);
+                self.mark_value(ref.pvalue.*, mark_func);
+                //         {
+        //             JSVarRef *var_ref = (JSVarRef *)gp;
+        //             /* only detached variable referenced are taken into account */
+        //             assert(var_ref->is_detached);
+        //             JS_MarkValue(rt, *var_ref->pvalue, mark_func);
+        //         }
+                break;
+            },
+            .JS_GC_OBJ_TYPE_ASYNC_FUNCTION => |func| {
+                if (func.is_active) {
+                    self.async_func_mark(&func.func_state, mark_func);
+                }
+                self.mark_value(func.resolving_funcs[0], mark_func);
+                self.mark_value(func.resolving_funcs[1], mark_func);
+
+                //         {
+        //             JSAsyncFunctionData *s = (JSAsyncFunctionData *)gp;
+        //             if (s->is_active)
+        //                 async_func_mark(rt, &s->func_state, mark_func);
+        //             JS_MarkValue(rt, s->resolving_funcs[0], mark_func);
+        //             JS_MarkValue(rt, s->resolving_funcs[1], mark_func);
+        //         }
+                break;
+            },
+            .JS_GC_OBJ_TYPE_SHAPE => |shape| {
+                if (shape.proto) |proto| {
+                    mark_func(self, &proto.header.data);
+                }
+                //         {
+        //             JSShape *sh = (JSShape *)gp;
+        //             if (sh->proto != NULL) {
+        //                 mark_func(rt, &sh->proto->header);
+        //             }
+        //         }
+                break;
+            },
+            .JS_GC_OBJ_TYPE_JS_CONTEXT => |ctx| {
+                self.mark_context(ctx, mark_func);
+                //         {
+        //             JSContext *ctx = (JSContext *)gp;
+        //             JS_MarkContext(rt, ctx, mark_func);
+        //         }
+                break;
+            },
+        }
+        // switch(gp->gc_obj_type) {
+        //     case JS_GC_OBJ_TYPE_JS_OBJECT:
+        //         
+        //         break;
+        //     case JS_GC_OBJ_TYPE_FUNCTION_BYTECODE:
+        
+        //         break;
+        //     case JS_GC_OBJ_TYPE_VAR_REF:
+        
+        //         break;
+        //     case JS_GC_OBJ_TYPE_ASYNC_FUNCTION:
+        
+        //         break;
+        //     case JS_GC_OBJ_TYPE_SHAPE:
+        
+        //         break;
+        //     case JS_GC_OBJ_TYPE_JS_CONTEXT:
+        
+        //         break;
+        //     default:
+        //         abort();
+        // }
+    }
+
+    /// Marks a JSContext object as part of the "mark" portion of the GC algorithm.
+    fn mark_context(self: *Self, ctx: *JSContext, mark_func: MarkFunc) void {
+
+        var loaded_module = ctx.loaded_modules.first;
+        while(loaded_module) |module| {
+            self.mark_module_def(&module.data, mark_func);
+            loaded_module = module.next;
+        }
+
+        self.mark_value(ctx.global_obj, mark_func);
+        self.mark_value(ctx.global_var_obj, mark_func);
+        self.mark_value(ctx.throw_type_error, mark_func);
+        self.mark_value(ctx.eval_obj, mark_func);
+        self.mark_value(ctx.array_proto_values, mark_func);
+
+        for(ctx.native_error_proto) |proto| {
+            self.mark_value(proto, mark_func);
+        }
+        for(ctx.class_proto) |class| {
+            self.mark_value(class, mark_func);
+        }
+
+        self.mark_value(ctx.iterator_proto, mark_func);
+        self.mark_value(ctx.async_iterator_proto, mark_func);
+        self.mark_value(ctx.promise_ctor, mark_func);
+        self.mark_value(ctx.array_ctor, mark_func);
+        self.mark_value(ctx.regexp_ctor, mark_func);
+        self.mark_value(ctx.function_ctor, mark_func);
+        self.mark_value(ctx.function_proto, mark_func);
+
+        if (ctx.array_shape) |shape| {
+            mark_func(self, &shape.header.data);
+        }
+        // int i;
+        // struct list_head *el;
+
+        // /* modules are not seen by the GC, so we directly mark the objects
+        // referenced by each module */
+        // list_for_each(el, &ctx->loaded_modules) {
+        //     JSModuleDef *m = list_entry(el, JSModuleDef, link);
+        //     js_mark_module_def(rt, m, mark_func);
+        // }
+
+        // JS_MarkValue(rt, ctx->global_obj, mark_func);
+        // JS_MarkValue(rt, ctx->global_var_obj, mark_func);
+
+        // JS_MarkValue(rt, ctx->throw_type_error, mark_func);
+        // JS_MarkValue(rt, ctx->eval_obj, mark_func);
+
+        // JS_MarkValue(rt, ctx->array_proto_values, mark_func);
+        // for(i = 0; i < JS_NATIVE_ERROR_COUNT; i++) {
+        //     JS_MarkValue(rt, ctx->native_error_proto[i], mark_func);
+        // }
+        // for(i = 0; i < rt->class_count; i++) {
+        //     JS_MarkValue(rt, ctx->class_proto[i], mark_func);
+        // }
+        // JS_MarkValue(rt, ctx->iterator_proto, mark_func);
+        // JS_MarkValue(rt, ctx->async_iterator_proto, mark_func);
+        // JS_MarkValue(rt, ctx->promise_ctor, mark_func);
+        // JS_MarkValue(rt, ctx->array_ctor, mark_func);
+        // JS_MarkValue(rt, ctx->regexp_ctor, mark_func);
+        // JS_MarkValue(rt, ctx->function_ctor, mark_func);
+        // JS_MarkValue(rt, ctx->function_proto, mark_func);
+
+        // if (ctx->array_shape)
+        //     mark_func(rt, &ctx->array_shape->header);
+    }
+
+    fn async_func_mark(self: *Self, func_state: *JSAsyncFunctionState, mark_func: MarkFunc) void {
+        var stack_frame: *JSStackFrame = &func_state.frame;
+        self.mark_value(stack_frame.curr_func, mark_func);
+        self.mark_value(func_state.this_val, mark_func);
+        if (stack_frame.cur_sp) |sp| {
+            // if the function is running, cur_sp is not known so we
+            // cannot mark the stack. Marking the variables is not needed
+            // because a running function cannot be part of a removable cycle
+            for (stack_frame.arg_buf) |arg| {
+                self.mark_value(arg, mark_func);
+            }
+        }
+        // JSStackFrame *sf;
+        // JSValue *sp;
+
+        // sf = &s->frame;
+        // JS_MarkValue(rt, sf->cur_func, mark_func);
+        // JS_MarkValue(rt, s->this_val, mark_func);
+        // if (sf->cur_sp) {
+        //     /* if the function is running, cur_sp is not known so we
+        //     cannot mark the stack. Marking the variables is not needed
+        //     because a running function cannot be part of a removable
+        //     cycle */
+        //     for(sp = sf->arg_buf; sp < sf->cur_sp; sp++)
+        //         JS_MarkValue(rt, *sp, mark_func);
+        // }
+    }
+
+    fn mark_value(self: *Self, val: JSValue, mark_func: MarkFunc) void {
+        switch(val) {
+            .JS_TAG_OBJECT, .JS_TAG_FUNCTION_BYTECODE => |v| {
+                mark_func(self, &v.header.data);
+                break;
+            },
+        }
+
+        // if (JS_VALUE_HAS_REF_COUNT(val)) {
+        //     switch(JS_VALUE_GET_TAG(val)) {
+        //     case JS_TAG_OBJECT:
+        //     case JS_TAG_FUNCTION_BYTECODE:
+        //         mark_func(rt, JS_VALUE_GET_PTR(val));
+        //         break;
+        //     default:
+        //         break;
+        //     }
+        // }
+    }
+
+    fn autoinit_mark(self: *Self, init: *JSPropertyAutoInit, mark_func: MarkFunc) void {
+        mark_func(self, &init.realm.header.data);
+        // mark_func(rt, &js_autoinit_get_realm(pr)->header);
+    }
+
+    fn mark_module_def(self: *Self, module: *JSModuleDef, mark_func: MarkFunc) void {
+        for(module.export_entries.items) |*entry| {
+            switch(entry.value) {
+                .JS_EXPORT_TYPE_LOCAL => |*local| {
+                    if (local.var_ref) |ref| {
+                        mark_func(self, &ref.header.data);
+                    }
+                    break;
+                }
+            }
+        }
+
+        self.mark_value(module.module_ns, mark_func);
+        self.mark_value(module.func_obj, mark_func);
+        self.mark_value(module.eval_exception, mark_func);
+        self.mark_value(module.meta_obj, mark_func);
+        // int i;
+
+        // for(i = 0; i < m->export_entries_count; i++) {
+        //     JSExportEntry *me = &m->export_entries[i];
+        //     if (me->export_type == JS_EXPORT_TYPE_LOCAL &&
+        //         me->u.local.var_ref) {
+        //         mark_func(rt, &me->u.local.var_ref->header);
+        //     }
+        // }
+
+        // JS_MarkValue(rt, m->module_ns, mark_func);
+        // JS_MarkValue(rt, m->func_obj, mark_func);
+        // JS_MarkValue(rt, m->eval_exception, mark_func);
+        // JS_MarkValue(rt, m->meta_obj, mark_func);
     }
 };
 
@@ -1682,6 +2880,29 @@ test "JSRuntime - new_context()" {
         testing.expect(runtime.gc_obj_list.len == 1);
         testing.expect(context.header.data.ref_count == 1);
     }
+}
+
+/// A tagged union that maps JSGCObjectTypes to the objects that they point to.
+const GCObject = union(JSGCObjectType) {
+    JS_GC_OBJ_TYPE_JS_OBJECT: *JSObject,
+    JS_GC_OBJ_TYPE_FUNCTION_BYTECODE: *JSFunctionBytecode,
+    JS_GC_OBJ_TYPE_SHAPE: *JSShape,
+    JS_GC_OBJ_TYPE_VAR_REF: *JSVarRef,
+    JS_GC_OBJ_TYPE_ASYNC_FUNCTION: *JSAsyncFunctionData,
+    JS_GC_OBJ_TYPE_JS_CONTEXT: *JSContext,
+};
+
+/// Gets the object that the given JSGCObjectHeaderNode is attached to.
+/// Returns a pointer to the resulting object.
+fn get_gc_object(gc: *JSGCObjectHeaderNode) GCObject {
+    return switch(gc.data.gc_obj_type) {
+        .JS_GC_OBJ_TYPE_JS_OBJECT => @fieldParentPtr(JSObject, "header", gc),
+        .JS_GC_OBJ_TYPE_SHAPE => @fieldParentPtr(JSShape, "header", gc),
+        .JS_GC_OBJ_TYPE_JS_CONTEXT => @fieldParentPtr(JSContext, "header", gc),
+        .JS_GC_OBJ_TYPE_FUNCTION_BYTECODE => @fieldParentPtr(JSFunctionBytecode, "header", gc),
+        .JS_GC_OBJ_TYPE_VAR_REF => @fieldParentPtr(JSVarRef, "header", gc),
+        .JS_GC_OBJ_TYPE_ASYNC_FUNCTION => @fieldParentPtr(JSAsyncFunctionData, "header", gc),
+    };
 }
 
 // const JSRuntime = struct {
