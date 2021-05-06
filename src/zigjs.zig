@@ -150,7 +150,9 @@ const JSValue = union(JSTag) {
     JS_TAG_FLOAT64: f64,
 };
 
-const JSAtom = enum {
+const JSAtom = u32;
+
+const JSAtomEnum = enum {
     JS_ATOM_NULL,
 
     // /* Note: first atoms are considered as keywords in the parser */
@@ -410,13 +412,15 @@ const JSAtom = enum {
     // #ifdef CONFIG_BIGNUM
     // JS_ATOM_Symbol_operatorSet,
     // #endif
+
+    JS_ATOM_END,
 };
 //     enum {
 //     JS_ATOM_NULL,
 // #define DEF(name, str) JS_ATOM_ ## name,
 // #include "quickjs-atom.h"
 // #undef DEF
-//     JS_ATOM_END,
+    
 // };
 
 const JSSymbol = struct {
@@ -1296,6 +1300,501 @@ const JSMapState = struct {
 // } JSMapState;
 
 
+
+const JSOpCodeFormat = enum {
+    none,
+    none_int,
+    none_loc,
+    none_arg,
+    none_var_ref,
+    _u8,
+    _i8,
+    loc8,
+    const8,
+    label8,
+    _u16,
+    _i16,
+    label16,
+    npop,
+    npopx,
+    npop_u16,
+    loc,
+    arg,
+    var_ref,
+    _u32,
+    _i32,
+    _const,
+    label,
+    atom,
+    atom_u8,
+    atom_u16,
+    atom_label_u8,
+    atom_label_u16,
+    label_u16,
+};
+
+const JSOpCode = struct {
+    name: []const u8,
+
+    /// in bytes
+    size: u8,
+
+    /// the opcodes remove n_pop items from the top of the stack
+    /// then pushes n_push items
+    n_pop: u8,
+    n_push: u8,
+    fmt: JSOpCodeFormat,
+
+    const Self = @This();
+    fn init(size: u8, n_pop: u8, n_push: u8, fmt: JSOpCodeFormat) Self {
+        return Self {
+            .size = size,
+            .n_pop = n_pop,
+            .n_push = n_push,
+            .fmt = fmt
+        };
+    }
+
+// #ifdef DUMP_BYTECODE
+//     const char *name;
+// #endif
+//     uint8_t size; /* in bytes */
+//     /* the opcodes remove n_pop items from the top of the stack, then
+//        pushes n_push items */
+//     uint8_t n_pop;
+//     uint8_t n_push;
+//     uint8_t fmt;
+};
+
+fn generate_op_code_enum(comptime opcode_info: []JSOpCode) type {
+    const fields: []const std.builtin.TypeInfo.EnumField = [opcode_info.len]std.builtin.TypeInfo.EnumField;
+    for(opcode_info) |op, i| {
+        fields[i] = .{
+            .name = "OP_" ++ op.name,
+            .value = i
+        };
+    }
+    return @Type(.{
+        .Enum = .{
+            .layout = .Auto,
+            .fields = fields
+        }
+    });
+}
+
+const OpCodeEnum = generate_op_code_enum(opcode_info);
+
+const OP_COUNT: u8 = @enumToInt(OpCodeEnum.OP_nop);
+const OP_TEMP_START: u8 = OP_COUNT + 1;
+const OP_TEMP_END: u8 = @enumToInt(OpCodeEnum.is_function) + 1;
+
+const opcode_info: []JSOpCode = [_]JSOpCode{
+    //* never emitted */
+    JSOpCode.init("invalid", 1, 0, 0, none) ,
+
+    // /* push values */
+    JSOpCode.init(       "push_i32", 5, 0, 1, ._i32),
+    JSOpCode.init(     "push_const", 5, 0, 1, ._const),
+    //* must follow push_const */
+    JSOpCode.init(       "fclosure", 5, 0, 1, ._const) ,
+    JSOpCode.init("push_atom_value", 5, 0, 1, .atom),
+    JSOpCode.init( "private_symbol", 5, 0, 1, .atom),
+    JSOpCode.init(      "undefined", 1, 0, 1, .none),
+    JSOpCode.init(           "null", 1, 0, 1, .none),
+
+    //* only used at the start of a function */
+    JSOpCode.init(      "push_this", 1, 0, 1, .none),
+    JSOpCode.init(     "push_false", 1, 0, 1, .none),
+    JSOpCode.init(      "push_true", 1, 0, 1, .none),
+    JSOpCode.init(         "object", 1, 0, 1, .none),
+    //* only used at the start of a function */
+    JSOpCode.init( "special_object", 2, 0, 1, ._u8),
+    //* only used at the start of a function */
+    JSOpCode.init(           "rest", 3, 0, 1, ._u16),
+
+    //* a -> */
+    JSOpCode.init(           "drop", 1, 1, 0, .none),
+    //* a b -> b */
+    JSOpCode.init(            "nip", 1, 2, 1, .none),
+    //* a b c -> b c */ 
+    JSOpCode.init(           "nip1", 1, 3, 2, .none),
+    //* a -> a a */
+    JSOpCode.init(            "dup", 1, 1, 2, .none),
+    //* a b -> a a b */
+    JSOpCode.init(           "dup1", 1, 2, 3, .none),
+    //* a b -> a b a b */ 
+    JSOpCode.init(           "dup2", 1, 2, 4, .none),
+    //* a b c -> a b c a b c */
+    JSOpCode.init(           "dup3", 1, 3, 6, .none) ,
+    //* obj a -> a obj a (dup_x1) */
+    JSOpCode.init(        "insert2", 1, 2, 3, .none) ,
+    //* obj prop a -> a obj prop a (dup_x2) */
+    JSOpCode.init(        "insert3", 1, 3, 4, .none) ,
+    //* this obj prop a -> a this obj prop a */
+    JSOpCode.init(        "insert4", 1, 4, 5, .none) ,
+    //* obj a b -> a obj b */
+    JSOpCode.init(          "perm3", 1, 3, 3, .none) ,
+    //* obj prop a b -> a obj prop b */
+    JSOpCode.init(          "perm4", 1, 4, 4, .none) ,
+    //* this obj prop a b -> a this obj prop b */
+    JSOpCode.init(          "perm5", 1, 5, 5, .none) ,
+    //* a b -> b a */
+    JSOpCode.init(           "swap", 1, 2, 2, .none) ,
+    //* a b c d -> c d a b */
+    JSOpCode.init(          "swap2", 1, 4, 4, .none) ,
+    //* x a b -> a b x */
+    JSOpCode.init(          "rot3l", 1, 3, 3, .none) ,
+    //* a b x -> x a b */
+    JSOpCode.init(          "rot3r", 1, 3, 3, .none) ,
+    //* x a b c -> a b c x */
+    JSOpCode.init(          "rot4l", 1, 4, 4, .none) ,
+    //* x a b c d -> a b c d x */
+    JSOpCode.init(          "rot5l", 1, 5, 5, .none) ,
+
+    //* func new.target args -> ret. arguments are not counted in n_pop */
+    JSOpCode.init("call_constructor", 3, 2, 1, .npop) ,
+    //* arguments are not counted in n_pop */
+    JSOpCode.init(           "call", 3, 1, 1, .npop) ,
+    //* arguments are not counted in n_pop */
+    JSOpCode.init(      "tail_call", 3, 1, 0, .npop) ,
+    //* arguments are not counted in n_pop */
+    JSOpCode.init(    "call_method", 3, 2, 1, .npop) ,
+    //* arguments are not counted in n_pop */
+    JSOpCode.init("tail_call_method", 3, 2, 0, .npop) ,
+    //* arguments are not counted in n_pop */
+    JSOpCode.init(     "array_from", 3, 0, 1, .npop) ,
+    JSOpCode.init(          "apply", 3, 3, 1, ._u16),
+    JSOpCode.init(         "return", 1, 1, 0, .none),
+    JSOpCode.init(   "return_undef", 1, 0, 0, .none),
+    JSOpCode.init("check_ctor_return", 1, 1, 2, .none),
+    JSOpCode.init(     "check_ctor", 1, 0, 0, .none),
+    //* this_obj func -> this_obj func */
+    JSOpCode.init(    "check_brand", 1, 2, 2, .none) ,
+    //* this_obj home_obj -> */
+    JSOpCode.init(      "add_brand", 1, 2, 0, .none) ,
+    JSOpCode.init(   "return_async", 1, 1, 0, .none),
+    JSOpCode.init(          "throw", 1, 1, 0, .none),
+    JSOpCode.init(      "throw_var", 6, 0, 0, .atom_u8),
+    //* func args... -> ret_val */
+    JSOpCode.init(           "eval", 5, 1, 1, .npop_u16) ,
+    //* func array -> ret_eval */
+    JSOpCode.init(     "apply_eval", 3, 2, 1, ._u16) ,
+    //* create a RegExp object from the pattern and a
+    JSOpCode.init(         "regexp", 1, 2, 1, .none) ,
+    // bytecode string */
+    JSOpCode.init(      "get_super", 1, 1, 1, .none),
+    //* dynamic module import */
+    JSOpCode.init(         "import", 1, 1, 1, .none) ,
+
+    //* check if a variable exists */
+    JSOpCode.init(      "check_var", 5, 0, 1, .atom) ,
+    //* push undefined if the variable does not exist */
+    JSOpCode.init(  "get_var_undef", 5, 0, 1, .atom) ,
+    //* throw an exception if the variable does not exist */
+    JSOpCode.init(        "get_var", 5, 0, 1, .atom) ,
+    //* must come after get_var */
+    JSOpCode.init(        "put_var", 5, 1, 0, .atom) ,
+    //* must come after put_var. Used to initialize a global lexical variable */
+    JSOpCode.init(   "put_var_init", 5, 1, 0, .atom) ,
+    //* for strict mode variable write */
+    JSOpCode.init( "put_var_strict", 5, 2, 0, .atom) ,
+
+    JSOpCode.init(  "get_ref_value", 1, 2, 3, .none),
+    JSOpCode.init(  "put_ref_value", 1, 3, 0, .none),
+
+    JSOpCode.init(     "define_var", 6, 0, 0, atom_u8),
+    JSOpCode.init("check_define_var", 6, 0, 0, atom_u8),
+    JSOpCode.init(    "define_func", 6, 1, 0, atom_u8),
+    JSOpCode.init(      "get_field", 5, 1, 1, .atom),
+    JSOpCode.init(     "get_field2", 5, 1, 2, .atom),
+    JSOpCode.init(      "put_field", 5, 2, 0, .atom),
+    //* obj prop -> value */
+    JSOpCode.init( "get_private_field", 1, 2, 1, .none) ,
+    //* obj value prop -> */
+    JSOpCode.init( "put_private_field", 1, 3, 0, .none) ,
+    //* obj prop value -> obj */
+    JSOpCode.init("define_private_field", 1, 3, 1, .none) ,
+    JSOpCode.init(   "get_array_el", 1, 2, 1, .none),
+    //* obj prop -> obj value */
+    JSOpCode.init(  "get_array_el2", 1, 2, 2, .none) ,
+    JSOpCode.init(   "put_array_el", 1, 3, 0, .none),
+    //* this obj prop -> value */
+    JSOpCode.init("get_super_value", 1, 3, 1, .none) ,
+    //* this obj prop value -> */
+    JSOpCode.init("put_super_value", 1, 4, 0, .none) ,
+    JSOpCode.init(   "define_field", 5, 2, 1, .atom),
+    JSOpCode.init(       "set_name", 5, 1, 1, .atom),
+    JSOpCode.init("set_name_computed", 1, 2, 2, .none),
+    JSOpCode.init(      "set_proto", 1, 2, 1, .none),
+    JSOpCode.init("set_home_object", 1, 2, 2, .none),
+    JSOpCode.init("define_array_el", 1, 3, 2, .none),
+    //* append enumerated object, update length */
+    JSOpCode.init(         "append", 1, 3, 2, .none) ,
+    JSOpCode.init("copy_data_properties", 2, 3, 3, ._u8),
+    JSOpCode.init(  "define_method", 6, 2, 1, .atom_u8),
+    //* must come after define_method */
+    JSOpCode.init("define_method_computed", 2, 3, 1, ._u8) ,
+    //* parent ctor -> ctor proto */
+    JSOpCode.init(   "define_class", 6, 2, 2, .atom_u8) ,
+    //* field_name parent ctor -> field_name ctor proto (class with computed name) */
+    JSOpCode.init(   "define_class_computed", 6, 3, 3, .atom_u8) ,
+
+    JSOpCode.init(        "get_loc", 3, 0, 1, .loc),
+    //* must come after get_loc */
+    JSOpCode.init(        "put_loc", 3, 1, 0, .loc) ,
+    //* must come after put_loc */
+    JSOpCode.init(        "set_loc", 3, 1, 1, .loc) ,
+    JSOpCode.init(        "get_arg", 3, 0, 1, .arg),
+    //* must come after get_arg */
+    JSOpCode.init(        "put_arg", 3, 1, 0, .arg) ,
+    //* must come after put_arg */
+    JSOpCode.init(        "set_arg", 3, 1, 1, .arg) ,
+    JSOpCode.init(    "get_var_ref", 3, 0, 1, var_ref) ,
+    //* must come after get_var_ref */
+    JSOpCode.init(    "put_var_ref", 3, 1, 0, var_ref) ,
+    //* must come after put_var_ref */
+    JSOpCode.init(    "set_var_ref", 3, 1, 1, var_ref) ,
+    JSOpCode.init("set_loc_uninitialized", 3, 0, 0, .loc),
+    JSOpCode.init(  "get_loc_check", 3, 0, 1, .loc),
+    //* must come after get_loc_check */
+    JSOpCode.init(  "put_loc_check", 3, 1, 0, .loc) ,
+    JSOpCode.init(  "put_loc_check_init", 3, 1, 0, .loc),
+    JSOpCode.init("get_var_ref_check", 3, 0, 1, var_ref) ,
+    //* must come after get_var_ref_check */
+    JSOpCode.init("put_var_ref_check", 3, 1, 0, var_ref) ,
+    JSOpCode.init("put_var_ref_check_init", 3, 1, 0, var_ref),
+    JSOpCode.init(      "close_loc", 3, 0, 0, .loc),
+    JSOpCode.init(       "if_false", 5, 1, 0, .label),
+    //* must come after if_false */
+    JSOpCode.init(        "if_true", 5, 1, 0, .label) ,
+    //* must come after if_true */
+    JSOpCode.init(           "goto", 5, 0, 0, .label) ,
+    JSOpCode.init(          "catch", 5, 0, 1, .label),
+    //* used to execute the finally block */
+    JSOpCode.init(          "gosub", 5, 0, 0, .label) ,
+    //* used to return from the finally block */
+    JSOpCode.init(            "ret", 1, 1, 0, .none) ,
+
+    JSOpCode.init(      "to_object", 1, 1, 1, .none),
+    //JSOpCode.init(      "to_string", 1, 1, 1, .none),
+    JSOpCode.init(     "to_propkey", 1, 1, 1, .none),
+    JSOpCode.init(    "to_propkey2", 1, 2, 2, .none),
+
+    //* must be in the same order as scope_xxx */
+    JSOpCode.init(   "with_get_var", 10, 1, 0, .atom_label_u8)     ,
+    //* must be in the same order as scope_xxx */
+    JSOpCode.init(   "with_put_var", 10, 2, 1, .atom_label_u8)     ,
+    //* must be in the same order as scope_xxx */
+    JSOpCode.init("with_delete_var", 10, 1, 0, .atom_label_u8)     ,
+    //* must be in the same order as scope_xxx */
+    JSOpCode.init(  "with_make_ref", 10, 1, 0, .atom_label_u8)     ,
+    //* must be in the same order as scope_xxx */
+    JSOpCode.init(   "with_get_ref", 10, 1, 0, .atom_label_u8)     ,
+    JSOpCode.init("with_get_ref_undef", 10, 1, 0, .atom_label_u8),
+
+    JSOpCode.init(   "make_loc_ref", 7, 0, 2, .atom_u16),
+    JSOpCode.init(   "make_arg_ref", 7, 0, 2, .atom_u16),
+    JSOpCode.init("make_var_ref_ref", 7, 0, 2, .atom_u16),
+    JSOpCode.init(   "make_var_ref", 5, 0, 2, .atom),
+
+    JSOpCode.init(   "for_in_start", 1, 1, 1, .none),
+    JSOpCode.init(   "for_of_start", 1, 1, 3, .none),
+    JSOpCode.init("for_await_of_start", 1, 1, 3, .none),
+    JSOpCode.init(    "for_in_next", 1, 1, 3, .none),
+    JSOpCode.init(    "for_of_next", 2, 3, 5, u8),
+    JSOpCode.init("for_await_of_next", 1, 3, 4, .none),
+    JSOpCode.init("iterator_get_value_done", 1, 1, 2, .none),
+    JSOpCode.init( "iterator_close", 1, 3, 0, .none),
+    JSOpCode.init("iterator_close_return", 1, 4, 4, .none),
+    JSOpCode.init("async_iterator_close", 1, 3, 2, .none),
+    JSOpCode.init("async_iterator_next", 1, 4, 4, .none),
+    JSOpCode.init("async_iterator_get", 2, 4, 5, u8),
+    JSOpCode.init(  "initial_yield", 1, 0, 0, .none),
+    JSOpCode.init(          "yield", 1, 1, 2, .none),
+    JSOpCode.init(     "yield_star", 1, 2, 2, .none),
+    JSOpCode.init("async_yield_star", 1, 1, 2, .none),
+    JSOpCode.init(          "await", 1, 1, 1, .none),
+
+    //* arithmetic/logic operations */
+    JSOpCode.init(            "neg", 1, 1, 1, .none),
+    JSOpCode.init(           "plus", 1, 1, 1, .none),
+    JSOpCode.init(            "dec", 1, 1, 1, .none),
+    JSOpCode.init(            "inc", 1, 1, 1, .none),
+    JSOpCode.init(       "post_dec", 1, 1, 2, .none),
+    JSOpCode.init(       "post_inc", 1, 1, 2, .none),
+    JSOpCode.init(        "dec_loc", 2, 0, 0, .loc8),
+    JSOpCode.init(        "inc_loc", 2, 0, 0, .loc8),
+    JSOpCode.init(        "add_loc", 2, 1, 0, .loc8),
+    JSOpCode.init(            "not", 1, 1, 1, .none),
+    JSOpCode.init(           "lnot", 1, 1, 1, .none),
+    JSOpCode.init(         "typeof", 1, 1, 1, .none),
+    JSOpCode.init(         "delete", 1, 2, 1, .none),
+    JSOpCode.init(     "delete_var", 5, 0, 1, .atom),
+
+    JSOpCode.init(            "mul", 1, 2, 1, .none),
+    JSOpCode.init(            "div", 1, 2, 1, .none),
+    JSOpCode.init(            "mod", 1, 2, 1, .none),
+    JSOpCode.init(            "add", 1, 2, 1, .none),
+    JSOpCode.init(            "sub", 1, 2, 1, .none),
+    JSOpCode.init(            "pow", 1, 2, 1, .none),
+    JSOpCode.init(            "shl", 1, 2, 1, .none),
+    JSOpCode.init(            "sar", 1, 2, 1, .none),
+    JSOpCode.init(            "shr", 1, 2, 1, .none),
+    JSOpCode.init(             "lt", 1, 2, 1, .none),
+    JSOpCode.init(            "lte", 1, 2, 1, .none),
+    JSOpCode.init(             "gt", 1, 2, 1, .none),
+    JSOpCode.init(            "gte", 1, 2, 1, .none),
+    JSOpCode.init(     "instanceof", 1, 2, 1, .none),
+    JSOpCode.init(             "in", 1, 2, 1, .none),
+    JSOpCode.init(             "eq", 1, 2, 1, .none),
+    JSOpCode.init(            "neq", 1, 2, 1, .none),
+    JSOpCode.init(      "strict_eq", 1, 2, 1, .none),
+    JSOpCode.init(     "strict_neq", 1, 2, 1, .none),
+    JSOpCode.init(            "and", 1, 2, 1, .none),
+    JSOpCode.init(            "xor", 1, 2, 1, .none),
+    JSOpCode.init(             "or", 1, 2, 1, .none),
+    JSOpCode.init("is_undefined_or_null", 1, 1, 1, .none),
+
+    // TODO: Support bignum
+    // #ifdef CONFIG_BIGNUM
+    // JSOpCode.init(      "mul_pow10", 1, 2, 1, .none),
+    // JSOpCode.init(       "math_mod", 1, 2, 1, .none),
+    // #endif
+    //* must be the last non short and non temporary opcode */
+    JSOpCode.init(            "nop", 1, 0, 0, .none) ,
+
+    //* temporary opcodes: never emitted in the final bytecode */
+
+    //* emitted in phase 1, removed in phase 2 */
+    JSOpCode.init("set_arg_valid_upto", 3, 0, 0, .arg) ,
+
+    //* emitted in phase 1, removed in phase 2 */
+    JSOpCode.init(    "enter_scope", 3, 0, 0, .u16)  ,
+    //* emitted in phase 1, removed in phase 2 */
+    JSOpCode.init(    "leave_scope", 3, 0, 0, .u16)  ,
+
+    //* emitted in phase 1, removed in phase 3 */
+    JSOpCode.init(          ".label", 5, 0, 0, .label) ,
+
+    //* emitted in phase 1, removed in phase 2 */
+    JSOpCode.init("scope_get_var_undef", 7, 0, 1, .atom_u16) ,
+    //* emitted in phase 1, removed in phase 2 */
+    JSOpCode.init(  "scope_get_var", 7, 0, 1, .atom_u16) ,
+    //* emitted in phase 1, removed in phase 2 */
+    JSOpCode.init(  "scope_put_var", 7, 1, 0, .atom_u16) ,
+    //* emitted in phase 1, removed in phase 2 */
+    JSOpCode.init("scope_delete_var", 7, 0, 1, .atom_u16) ,
+    //* emitted in phase 1, removed in phase 2 */
+    JSOpCode.init( "scope_make_ref", 11, 0, 2, .atom_label_u16) ,
+    //* emitted in phase 1, removed in phase 2 */
+    JSOpCode.init(  "scope_get_ref", 7, 0, 2, .atom_u16) ,
+    //* emitted in phase 1, removed in phase 2 */
+    JSOpCode.init("scope_put_var_init", 7, 0, 2, .atom_u16) ,
+    //* obj -> value, emitted in phase 1, removed in phase 2 */
+    JSOpCode.init("scope_get_private_field", 7, 1, 1, .atom_u16) ,
+    //* obj -> obj value, emitted in phase 1, removed in phase 2 */
+    JSOpCode.init("scope_get_private_field2", 7, 1, 2, .atom_u16) ,
+    //* obj value ->, emitted in phase 1, removed in phase 2 */
+    JSOpCode.init("scope_put_private_field", 7, 1, 1, .atom_u16) ,
+
+    //* emitted in phase 1, removed in phase 2 */
+    JSOpCode.init( "set_class_name", 5, 1, 1, ._u32) ,
+        
+    //* emitted in phase 1, removed in phase 3 */
+    JSOpCode.init(       "line_num", 5, 0, 0, ._u32) ,
+
+    // #if SHORT_OPCODES
+    JSOpCode.init(    "push_minus1", 1, 0, 1, .none_int),
+    JSOpCode.init(         "push_0", 1, 0, 1, .none_int),
+    JSOpCode.init(         "push_1", 1, 0, 1, .none_int),
+    JSOpCode.init(         "push_2", 1, 0, 1, .none_int),
+    JSOpCode.init(         "push_3", 1, 0, 1, .none_int),
+    JSOpCode.init(         "push_4", 1, 0, 1, .none_int),
+    JSOpCode.init(         "push_5", 1, 0, 1, .none_int),
+    JSOpCode.init(         "push_6", 1, 0, 1, .none_int),
+    JSOpCode.init(         "push_7", 1, 0, 1, .none_int),
+    JSOpCode.init(        "push_i8", 2, 0, 1, ._i8),
+    JSOpCode.init(       "push_i16", 3, 0, 1, ._i16),
+    JSOpCode.init(    "push_const8", 2, 0, 1, .const8),
+    //* must follow push_const8 */
+    JSOpCode.init(      "fclosure8", 2, 0, 1, .const8) ,
+    JSOpCode.init("push_empty_string", 1, 0, 1, .none),
+
+    JSOpCode.init(       "get_loc8", 2, 0, 1, .loc8),
+    JSOpCode.init(       "put_loc8", 2, 1, 0, .loc8),
+    JSOpCode.init(       "set_loc8", 2, 1, 1, .loc8),
+
+    JSOpCode.init(       "get_loc0", 1, 0, 1, .none_loc),
+    JSOpCode.init(       "get_loc1", 1, 0, 1, .none_loc),
+    JSOpCode.init(       "get_loc2", 1, 0, 1, .none_loc),
+    JSOpCode.init(       "get_loc3", 1, 0, 1, .none_loc),
+    JSOpCode.init(       "put_loc0", 1, 1, 0, .none_loc),
+    JSOpCode.init(       "put_loc1", 1, 1, 0, .none_loc),
+    JSOpCode.init(       "put_loc2", 1, 1, 0, .none_loc),
+    JSOpCode.init(       "put_loc3", 1, 1, 0, .none_loc),
+    JSOpCode.init(       "set_loc0", 1, 1, 1, .none_loc),
+    JSOpCode.init(       "set_loc1", 1, 1, 1, .none_loc),
+    JSOpCode.init(       "set_loc2", 1, 1, 1, .none_loc),
+    JSOpCode.init(       "set_loc3", 1, 1, 1, .none_loc),
+    JSOpCode.init(       "get_arg0", 1, 0, 1, .none_arg),
+    JSOpCode.init(       "get_arg1", 1, 0, 1, .none_arg),
+    JSOpCode.init(       "get_arg2", 1, 0, 1, .none_arg),
+    JSOpCode.init(       "get_arg3", 1, 0, 1, .none_arg),
+    JSOpCode.init(       "put_arg0", 1, 1, 0, .none_arg),
+    JSOpCode.init(       "put_arg1", 1, 1, 0, .none_arg),
+    JSOpCode.init(       "put_arg2", 1, 1, 0, .none_arg),
+    JSOpCode.init(       "put_arg3", 1, 1, 0, .none_arg),
+    JSOpCode.init(       "set_arg0", 1, 1, 1, .none_arg),
+    JSOpCode.init(       "set_arg1", 1, 1, 1, .none_arg),
+    JSOpCode.init(       "set_arg2", 1, 1, 1, .none_arg),
+    JSOpCode.init(       "set_arg3", 1, 1, 1, .none_arg),
+    JSOpCode.init(   "get_var_ref0", 1, 0, 1, .none_var_ref),
+    JSOpCode.init(   "get_var_ref1", 1, 0, 1, .none_var_ref),
+    JSOpCode.init(   "get_var_ref2", 1, 0, 1, .none_var_ref),
+    JSOpCode.init(   "get_var_ref3", 1, 0, 1, .none_var_ref),
+    JSOpCode.init(   "put_var_ref0", 1, 1, 0, .none_var_ref),
+    JSOpCode.init(   "put_var_ref1", 1, 1, 0, .none_var_ref),
+    JSOpCode.init(   "put_var_ref2", 1, 1, 0, .none_var_ref),
+    JSOpCode.init(   "put_var_ref3", 1, 1, 0, .none_var_ref),
+    JSOpCode.init(   "set_var_ref0", 1, 1, 1, .none_var_ref),
+    JSOpCode.init(   "set_var_ref1", 1, 1, 1, .none_var_ref),
+    JSOpCode.init(   "set_var_ref2", 1, 1, 1, .none_var_ref),
+    JSOpCode.init(   "set_var_ref3", 1, 1, 1, .none_var_ref),
+
+    JSOpCode.init(     "get_length", 1, 1, 1, .none),
+
+    JSOpCode.init(      "if_false8", 2, 1, 0, .label8),
+    //* must come after if_false8 */
+    JSOpCode.init(       "if_true8", 2, 1, 0, .label8) ,
+    //* must come after if_true8 */
+    JSOpCode.init(          "goto8", 2, 0, 0, .label8) ,
+    JSOpCode.init(         "goto16", 3, 0, 0, .label16),
+
+    JSOpCode.init(          "call0", 1, 1, 1, .npopx),
+    JSOpCode.init(          "call1", 1, 1, 1, .npopx),
+    JSOpCode.init(          "call2", 1, 1, 1, .npopx),
+    JSOpCode.init(          "call3", 1, 1, 1, .npopx),
+
+    JSOpCode.init(   "is_undefined", 1, 1, 1, .none),
+    JSOpCode.init(        "is_null", 1, 1, 1, .none),
+    JSOpCode.init(    "is_function", 1, 1, 1, .none),
+};
+
+// static const JSOpCode opcode_info[OP_COUNT + (OP_TEMP_END - OP_TEMP_START)] = {
+// #define FMT(f)
+// #define DEF(id, size, n_pop, n_push, f) { size, n_pop, n_push, OP_FMT_ ## f },
+// #include "quickjs-opcode.h"
+// #undef DEF
+// #undef FMT
+// };
+
+fn short_opcode_info(op: u8) JSOpCode {
+    return opcode_info[if (op >= OP_TEMP_START) op + OP_TEMP_END - OP_TEMP_START else op];
+
+    // opcode_info[(op) >= OP_TEMP_START ? \
+    //             (op) + (OP_TEMP_END - OP_TEMP_START) : (op)]
+}
+
 const AtomType = enum {
     JS_ATOM_TYPE_STRING = 1,
     JS_ATOM_TYPE_GLOBAL_SYMBOL,
@@ -1320,8 +1819,11 @@ const JSString = struct {
     header: JSRefCountHeader,
     hash: u30,
     hash_next: u30,
-    val: JSStringValue
+    val: JSStringValue,
+    atom_type: AtomType
 };
+
+const JSAtomStruct = JSString;
 
 // struct JSString {
 //     JSRefCountHeader header; /* must come first, 32-bit */
@@ -1342,7 +1844,93 @@ const JSString = struct {
 //     } u;
 // };
 
-const JSFunctionBytecode = struct {};
+const JSFunctionBytecode = struct {
+    header: JSGCObjectHeaderNode,
+    js_mode: u8,
+
+    /// true if a prototype field is necessary
+    has_prototype: bool,
+    
+    has_simple_parameter_list: bool,
+    is_derived_class_constructor: bool,
+
+    /// true if home_object needs to be initialized
+    need_home_object: bool,
+    func_kind: u2,
+    new_target_allowed: bool,
+    super_call_allowed: bool,
+    super_allowed: bool,
+    arguments_allowed: bool,
+    has_debug: bool,
+
+    /// stop backtrace on this function
+    backtrace_barrier: bool,
+    read_only_bytecode: bool,
+
+    byte_code_buf: []u8,
+    func_name: JSAtom,
+
+    /// arguments + local variables (arg_count + var_count)
+    vardefs: []JSVarDef,
+    /// list of variables in the closure
+    closure_var: []JSClosureVar,
+
+    arg_count: u16,
+    var_count: u16,
+    /// for the function.length property
+    defined_arg_count: u16,
+
+    /// maximum stack size
+    stack_size: u16,
+
+    /// function realm
+    realm: *JSContext,
+
+    // constant pool
+    cpool: []JSValue,
+
+    // JSGCObjectHeader header; /* must come first */
+    // uint8_t js_mode;
+    // uint8_t has_prototype : 1; /* true if a prototype field is necessary */
+    // uint8_t has_simple_parameter_list : 1;
+    // uint8_t is_derived_class_constructor : 1;
+    // /* true if home_object needs to be initialized */
+    // uint8_t need_home_object : 1;
+    // uint8_t func_kind : 2;
+    // uint8_t new_target_allowed : 1;
+    // uint8_t super_call_allowed : 1;
+    // uint8_t super_allowed : 1;
+    // uint8_t arguments_allowed : 1;
+    // uint8_t has_debug : 1;
+    // uint8_t backtrace_barrier : 1; /* stop backtrace on this function */
+    // uint8_t read_only_bytecode : 1;
+    // /* XXX: 4 bits available */
+    // uint8_t *byte_code_buf; /* (self pointer) */
+    // int byte_code_len;
+    // JSAtom func_name;
+    // JSVarDef *vardefs; /* arguments + local variables (arg_count + var_count) (self pointer) */
+    // JSClosureVar *closure_var; /* list of variables in the closure (self pointer) */
+    // uint16_t arg_count;
+    // uint16_t var_count;
+    // uint16_t defined_arg_count; /* for length function property */
+    // uint16_t stack_size; /* maximum stack size */
+    // JSContext *realm; /* function realm */
+    // JSValue *cpool; /* constant pool (self pointer) */
+    // int cpool_count;
+    // int closure_var_count;
+
+    // TODO: Add debugger stuff
+    // struct {
+    //     /* debug info, move to separate structure to save memory? */
+    //     JSAtom filename;
+    //     int line_num;
+    //     int source_len;
+    //     int pc2line_len;
+    //     uint8_t *pc2line_buf;
+    //     char *source;
+    // } debug;
+    // struct JSDebuggerFunctionInfo debugger;
+};
 
 // fn JS_VALUE_GET_TAG(v: JSValue) i32 { 
 //     return @intCast(i32, v.tag);
@@ -2269,7 +2857,7 @@ const ShapeHashMap = std.HashMap(u32, *JSShape, get_shape_hash, are_shapes_equal
 
 const JS_DEFAULT_STACK_SIZE: usize = (256 * 1024);
 
-const MarkFunc = fn(runtime: *JSRuntime, gp: *JSGCObjectHeader) void;
+const MarkFunc = fn(runtime: *JSRuntime, gp: *JSGCObjectHeaderNode) void;
 
 
 fn gc_decref_child(runtime: *JSRuntime, header: *JSGCObjectHeaderNode) void {
@@ -2288,6 +2876,32 @@ fn gc_decref_child(runtime: *JSRuntime, header: *JSGCObjectHeaderNode) void {
     // }
 }
 
+fn gc_scan_incref_child(runtime: *JSRuntime, header: *JSGCObjectHeaderNode) void {
+    header.data.ref_count += 1;
+    if (header.data.ref_count == 1) {
+        // ref_count was 0: remove from tmp_obj_list and add at the
+        // end of gc_obj_list
+        runtime.tmp_obj_list.remove(header);
+        runtime.gc_obj_list.append(header);
+
+        // reset the mark for the next GC call
+        header.data.mark = 0;
+    }
+    // p->ref_count++;
+    // if (p->ref_count == 1) {
+    //     /* ref_count was 0: remove from tmp_obj_list and add at the
+    //        end of gc_obj_list */
+    //     list_del(&p->link);
+    //     list_add_tail(&p->link, &rt->gc_obj_list);
+    //     p->mark = 0; /* reset the mark for the next GC call */
+    // }
+}
+
+fn gc_scan_incref_child2(runtime: *JSRuntime, header: *JSGCObjectHeaderNode) void {
+    header.data.ref_count += 1;
+    // p->ref_count++;
+}
+
 const JSRuntime = struct {
     allocator: *JSAllocator,
     classes: std.ArrayList(JSClass),
@@ -2297,8 +2911,8 @@ const JSRuntime = struct {
     // Garbage Collection data
     gc_phase: JSGCPhase,
     gc_obj_list: JSGCObjectHeaderList,
-    gc_zero_ref_count_list: std.TailQueue(*JSGCObjectHeader),
-    tmp_obj_list: std.TailQueue(*JSGCObjectHeader),
+    gc_zero_ref_count_list: JSGCObjectHeaderList,
+    tmp_obj_list: JSGCObjectHeaderList,
 
     /// The address of the top stack frame for the runtime
     stack_top: usize,
@@ -2330,6 +2944,9 @@ const JSRuntime = struct {
     /// The threshold that should be used to trigger garbage collection.
     /// This is automatically adjusted whenever garbage collection is triggered.
     gc_threshold: usize,
+
+    // TODO: Rework to use hash table
+    atom_array: std.ArrayList(*JSAtomStruct),
     
 // #ifdef CONFIG_BIGNUM
 //     bf_context_t bf_ctx;
@@ -2352,8 +2969,8 @@ const JSRuntime = struct {
             .gc_phase = .JS_GC_PHASE_NONE,
             .context_list = std.ArrayList(JSContext).init(&allocator.allocator),
             .gc_obj_list = JSGCObjectHeaderList{},
-            .gc_zero_ref_count_list = std.TailQueue(*JSGCObjectHeader){},
-            .tmp_obj_list = std.TailQueue(*JSGCObjectHeader){},
+            .gc_zero_ref_count_list = JSGCObjectHeaderList{},
+            .tmp_obj_list = JSGCObjectHeaderList{},
             .job_list = std.TailQueue(JSJobEntry){},
             .stack_top = @frameAddress(),
             .stack_size = JS_DEFAULT_STACK_SIZE,
@@ -2365,6 +2982,7 @@ const JSRuntime = struct {
             .can_block = false,
             .sab_funcs = null,
             .shape_hash = ShapeHashMap.init(&allocator.allocator),
+            .atom_array = std.ArrayList(*JSAtomStruct),
             .gc_threshold = 256 * 1024
         };
     }
@@ -2458,9 +3076,19 @@ const JSRuntime = struct {
     }
 
     /// Runs a garbage collection pass.
-    fn run_gc(self: *Self) void {
+    pub fn run_gc(self: *Self) void {
 
+        // decrement the reference of the children of each object
+        // mark = 1 after this pass
         self.gc_deref();
+
+        // keep the GC objects with a non zero refcont and their children.
+        // objects to keep are in gc_obj_list
+        // objects to destroy are in tmp_obj_list
+        self.gc_scan();
+
+        // free the GC objects in a cycle
+        self.gc_free_cycles();
 
         // /* decrement the reference of the children of each object. mark =
         // 1 after this pass. */
@@ -2473,6 +3101,120 @@ const JSRuntime = struct {
         // gc_free_cycles(rt);
     }
 
+    fn gc_free_cycles(self: *Self) void {
+        self.gc_phase = .JS_GC_PHASE_REMOVE_CYCLES;
+
+        while(self.tmp_obj_list.first) |obj| {
+            // only need to free the GC object associated with JS
+            // values. The rest will be automatically removed
+            // because they must be referenced by them.
+            var gc_obj = get_gc_object(obj);
+            switch(gc_obj) {
+                .JS_GC_OBJ_TYPE_JS_OBJECT => |object| self.free_object(object),
+                .JS_GC_OBJ_TYPE_FUNCTION_BYTECODE => |bytecode| self.free_bytecode(bytecode),
+                else => {
+                    self.tmp_obj_list.remove(obj);
+                    self.gc_zero_ref_count_list.append(obj);
+                    break;
+                }
+            }
+        }
+        self.gc_phase = .JS_GC_PHASE_NONE;
+
+        while(self.gc_zero_ref_count_list.first) |obj| {
+            var gc_obj = get_gc_object(obj);
+
+            switch(gc_obj) {
+                .JS_GC_OBJ_TYPE_JS_OBJECT => |object| {
+                    self.allocator.allocator.destroy(obj);
+                },
+                .JS_GC_OBJ_TYPE_FUNCTION_BYTECODE => |bytecode| {
+                    self.allocator.allocator.destroy(bytecode);
+                },
+                else => unreachable
+            }
+
+            self.gc_zero_ref_count_list.remove(obj);
+        }
+    //     struct list_head *el, *el1;
+    //     JSGCObjectHeader *p;
+    // #ifdef DUMP_GC_FREE
+    //     BOOL header_done = FALSE;
+    // #endif
+
+    //     rt->gc_phase = JS_GC_PHASE_REMOVE_CYCLES;
+
+    //     for(;;) {
+    //         el = rt->tmp_obj_list.next;
+    //         if (el == &rt->tmp_obj_list)
+    //             break;
+    //         p = list_entry(el, JSGCObjectHeader, link);
+    //         /* Only need to free the GC object associated with JS
+    //         values. The rest will be automatically removed because they
+    //         must be referenced by them. */
+    //         switch(p->gc_obj_type) {
+    //         case JS_GC_OBJ_TYPE_JS_OBJECT:
+    //         case JS_GC_OBJ_TYPE_FUNCTION_BYTECODE:
+    // #ifdef DUMP_GC_FREE
+    //             if (!header_done) {
+    //                 printf("Freeing cycles:\n");
+    //                 JS_DumpObjectHeader(rt);
+    //                 header_done = TRUE;
+    //             }
+    //             JS_DumpGCObject(rt, p);
+    // #endif
+    //             free_gc_object(rt, p);
+    //             break;
+    //         default:
+    //             list_del(&p->link);
+    //             list_add_tail(&p->link, &rt->gc_zero_ref_count_list);
+    //             break;
+    //         }
+    //     }
+    //     rt->gc_phase = JS_GC_PHASE_NONE;
+            
+    //     list_for_each_safe(el, el1, &rt->gc_zero_ref_count_list) {
+    //         p = list_entry(el, JSGCObjectHeader, link);
+    //         assert(p->gc_obj_type == JS_GC_OBJ_TYPE_JS_OBJECT ||
+    //             p->gc_obj_type == JS_GC_OBJ_TYPE_FUNCTION_BYTECODE);
+    //         js_free_rt(rt, p);
+    //     }
+
+    //     init_list_head(&rt->gc_zero_ref_count_list);
+    }
+
+    fn gc_scan(self: *Self) void {
+        var list_obj: ?*JSGCObjectHeaderNode = self.gc_obj_list.first;
+        while(list_obj) |obj| {
+            std.debug.assert(obj.data.ref_count > 0);
+            obj.data.mark = 0;
+            self.mark_children(obj, gc_scan_incref_child);
+            list_obj = obj.next;
+        }
+
+        list_obj = self.tmp_obj_list.first;
+        while(list_obj) |obj| {
+            self.mark_children(obj, gc_scan_incref_child2);
+        }
+
+        // struct list_head *el;
+        // JSGCObjectHeader *p;
+
+        // /* keep the objects with a refcount > 0 and their children. */
+        // list_for_each(el, &rt->gc_obj_list) {
+        //     p = list_entry(el, JSGCObjectHeader, link);
+        //     assert(p->ref_count > 0);
+        //     p->mark = 0; /* reset the mark for the next GC call */
+        //     mark_children(rt, p, gc_scan_incref_child);
+        // }
+        
+        // /* restore the refcount of the objects to be deleted. */
+        // list_for_each(el, &rt->tmp_obj_list) {
+        //     p = list_entry(el, JSGCObjectHeader, link);
+        //     mark_children(rt, p, gc_scan_incref_child2);
+        // }
+    }
+
     /// Decrements each GC object's refcount by 1 and sets their mark to 1.
     fn gc_deref(self: *Self) void {
         var list_obj: ?*JSGCObjectHeaderNode = self.gc_obj_list.first;
@@ -2481,8 +3223,8 @@ const JSRuntime = struct {
         // objects and move the GC objects with zero refcount to
         // tmp_obj_list
         while(list_obj) |obj| {
-            std.deug.assert(obj.data.mark == 0);
-            self.mark_children(obj, gc_deref_child);
+            std.debug.assert(obj.data.mark == 0);
+            self.mark_children(obj, gc_decref_child);
             obj.data.mark = 1;
             if (obj.data.ref_count == 0) {
                 self.gc_obj_list.remove(obj);
@@ -2516,7 +3258,7 @@ const JSRuntime = struct {
         switch(gc_obj) {
             .JS_GC_OBJ_TYPE_JS_OBJECT => |obj| {
                 const shape = obj.shape;
-                mark_func(self, &shape.header.data);
+                mark_func(self, &shape.header);
 
                 // mark all the fields
                 for(shape.properties.items) |*propertyShape, i| {
@@ -2526,10 +3268,10 @@ const JSRuntime = struct {
                             switch(prop) {
                                 .GETSET => |*getset| {
                                     if (getset.getter) |getter| {
-                                        mark_func(self, &getter.header.data);
+                                        mark_func(self, &getter.header);
                                     }
                                     if (getset.setter) |setter| {
-                                        mark_func(self, &setter.header.data);
+                                        mark_func(self, &setter.header);
                                     }
                                     break;
                                 },
@@ -2537,7 +3279,7 @@ const JSRuntime = struct {
                                     if (var_ref.is_detached) {
                                         // Note: the tag order does not matter
                                         // provided it is a GC object
-                                        mark_func(self, &var_ref.header.data);
+                                        mark_func(self, &var_ref.header);
                                     }
                                     break;
                                 },
@@ -2645,7 +3387,7 @@ const JSRuntime = struct {
             },
             .JS_GC_OBJ_TYPE_SHAPE => |shape| {
                 if (shape.proto) |proto| {
-                    mark_func(self, &proto.header.data);
+                    mark_func(self, &proto.header);
                 }
                 //         {
         //             JSShape *sh = (JSShape *)gp;
@@ -2719,7 +3461,7 @@ const JSRuntime = struct {
         self.mark_value(ctx.function_proto, mark_func);
 
         if (ctx.array_shape) |shape| {
-            mark_func(self, &shape.header.data);
+            mark_func(self, &shape.header);
         }
         // int i;
         // struct list_head *el;
@@ -2787,7 +3529,7 @@ const JSRuntime = struct {
     fn mark_value(self: *Self, val: JSValue, mark_func: MarkFunc) void {
         switch(val) {
             .JS_TAG_OBJECT, .JS_TAG_FUNCTION_BYTECODE => |v| {
-                mark_func(self, &v.header.data);
+                mark_func(self, &v.header);
                 break;
             },
         }
@@ -2805,7 +3547,7 @@ const JSRuntime = struct {
     }
 
     fn autoinit_mark(self: *Self, init: *JSPropertyAutoInit, mark_func: MarkFunc) void {
-        mark_func(self, &init.realm.header.data);
+        mark_func(self, &init.realm.header);
         // mark_func(rt, &js_autoinit_get_realm(pr)->header);
     }
 
@@ -2814,7 +3556,7 @@ const JSRuntime = struct {
             switch(entry.value) {
                 .JS_EXPORT_TYPE_LOCAL => |*local| {
                     if (local.var_ref) |ref| {
-                        mark_func(self, &ref.header.data);
+                        mark_func(self, &ref.header);
                     }
                     break;
                 }
@@ -2840,7 +3582,263 @@ const JSRuntime = struct {
         // JS_MarkValue(rt, m->eval_exception, mark_func);
         // JS_MarkValue(rt, m->meta_obj, mark_func);
     }
+
+    fn free_object(self: *Self, obj: *JSObject) void {
+        // used to tell the object is invalid whne freeing
+        // cycles
+        obj.free_mark = 1;
+
+        // free all the fields
+        var shape = obj.shape;
+        for(shape.properties.items) |*shapeProp, i| {
+            self.free_property(obj.properties[i], shapeProp.flags);
+        }
+        self.allocator.allocator.free(obj.properties);
+
+        // as an optimization we destroy the shape immediately
+        // without putting it in gc_zero_ref_count_list
+        self.free_shape(shape);
+
+        if (obj.first_weak_ref) |ref| {
+            self.reset_weak_ref(obj);
+        }
+
+        var finalizer: JSClassFinalizer = self.classes[obj.class_id].finalizer;
+        if (finalizer) |f| {
+            f(self, JSValue{ .JS_TAG_OBJECT = obj });
+        }
+
+        self.remove_gc_obj(&obj.header);
+        if (self.gc_phase == .JS_GC_PHASE_REMOVE_CYCLES and obj.header.ref_count != 0) {
+            self.gc_zero_ref_count_list.append(&obj.header);
+        } else {
+            self.allocator.allocator.destroy(obj);
+        }
+
+        // int i;
+        // JSClassFinalizer *finalizer;
+        // JSShape *sh;
+        // JSShapeProperty *pr;
+
+        // p->free_mark = 1; /* used to tell the object is invalid when
+        //                     freeing cycles */
+        // /* free all the fields */
+        // sh = p->shape;
+        // pr = get_shape_prop(sh);
+        // for(i = 0; i < sh->prop_count; i++) {
+        //     free_property(rt, &p->prop[i], pr->flags);
+        //     pr++;
+        // }
+        // js_free_rt(rt, p->prop);
+        // /* as an optimization we destroy the shape immediately without
+        // putting it in gc_zero_ref_count_list */
+        // js_free_shape(rt, sh);
+
+        // /* fail safe */
+        // p->shape = NULL;
+        // p->prop = NULL;
+
+        // if (unlikely(p->first_weak_ref)) {
+        //     reset_weak_ref(rt, p);
+        // }
+
+        // finalizer = rt->class_array[p->class_id].finalizer;
+        // if (finalizer)
+        //     (*finalizer)(rt, JS_MKPTR(JS_TAG_OBJECT, p));
+
+        // /* fail safe */
+        // p->class_id = 0;
+        // p->u.opaque = NULL;
+        // p->u.func.var_refs = NULL;
+        // p->u.func.home_object = NULL;
+
+        // remove_gc_object(&p->header);
+        // if (rt->gc_phase == JS_GC_PHASE_REMOVE_CYCLES && p->header.ref_count != 0) {
+        //     list_add_tail(&p->header.link, &rt->gc_zero_ref_count_list);
+        // } else {
+        //     js_free_rt(rt, p);
+        // }
+    }
+
+    fn free_bytecode(self: *Self, bytecode: *JSFunctionBytecode) void {
+        self.free_bytecode_atoms(bytecode.byte_code_buf, true);
+
+        // int i;
+
+        // #if 0
+        //     {
+        //         char buf[ATOM_GET_STR_BUF_SIZE];
+        //         printf("freeing %s\n",
+        //             JS_AtomGetStrRT(rt, buf, sizeof(buf), b->func_name));
+        //     }
+        // #endif
+        //     free_bytecode_atoms(rt, b->byte_code_buf, b->byte_code_len, TRUE);
+
+        //     if (b->vardefs) {
+        //         for(i = 0; i < b->arg_count + b->var_count; i++) {
+        //             JS_FreeAtomRT(rt, b->vardefs[i].var_name);
+        //         }
+        //     }
+        //     for(i = 0; i < b->cpool_count; i++)
+        //         JS_FreeValueRT(rt, b->cpool[i]);
+
+        //     for(i = 0; i < b->closure_var_count; i++) {
+        //         JSClosureVar *cv = &b->closure_var[i];
+        //         JS_FreeAtomRT(rt, cv->var_name);
+        //     }
+        //     if (b->realm)
+        //         JS_FreeContext(b->realm);
+
+        //     JS_FreeAtomRT(rt, b->func_name);
+        //     if (b->has_debug) {
+        //         JS_FreeAtomRT(rt, b->debug.filename);
+        //         js_free_rt(rt, b->debug.pc2line_buf);
+        //         js_free_rt(rt, b->debug.source);
+
+        //         if (b->debugger.breakpoints)
+        //             js_free_rt(rt, b->debugger.breakpoints);
+        //     }
+
+        //     remove_gc_object(&b->header);
+        //     if (rt->gc_phase == JS_GC_PHASE_REMOVE_CYCLES && b->header.ref_count != 0) {
+        //         list_add_tail(&b->header.link, &rt->gc_zero_ref_count_list);
+        //     } else {
+        //         js_free_rt(rt, b);
+        //     }
+    }
+
+    fn free_bytecode_atoms(self: *Self, bytecode: []u8, use_short_opcodes: bool) void {
+        var pos = 0;
+        while(pos < bytecode.len) {
+            var op = bytecode[pos];
+            var oi = if(use_short_opcodes) &short_opcode_info(op) else &opcode_info[op];
+            const len = oi.len;
+            switch(oi.fmt) {
+                .atom,
+                .atom_u8,
+                .atom_u16,
+                .atom_label_u8,
+                .atom_label_u16 => {
+                    const atom: JSAtom = std.mem.readInt(JSAtom, bytecode[pos+1..pos+1+4]);
+                    self.free_atom(atom);
+                }
+            }
+            pos += len;
+        }
+        // int pos, len, op;
+        // JSAtom atom;
+        // const JSOpCode *oi;
+        
+        // pos = 0;
+        // while (pos < bc_len) {
+        //     op = bc_buf[pos];
+        //     if (use_short_opcodes)
+        //         oi = &short_opcode_info(op);
+        //     else
+        //         oi = &opcode_info[op];
+                
+        //     len = oi->size;
+        //     switch(oi->fmt) {
+        //     case OP_FMT_atom:
+        //     case OP_FMT_atom_u8:
+        //     case OP_FMT_atom_u16:
+        //     case OP_FMT_atom_label_u8:
+        //     case OP_FMT_atom_label_u16:
+        //         atom = get_u32(bc_buf + pos + 1);
+        //         JS_FreeAtomRT(rt, atom);
+        //         break;
+        //     default:
+        //         break;
+        //     }
+        //     pos += len;
+        // }
+    }
+
+    fn free_atom(self: *Self, atom: JSAtom) void {
+        if (!atom_is_const(atom)) {
+            const p = self.atom_array[atom];
+            p.header.ref_count -= 1;
+
+            if (p.header.ref_count > 0) {
+                return;
+            }
+
+            self.free_atom_struct(p);
+            // p = rt->atom_array[i];
+            // if (--p->header.ref_count > 0)
+            //     return;
+            // JS_FreeAtomStruct(rt, p);
+        }
+        // if (!__JS_AtomIsConst(v))
+        // __JS_FreeAtom(rt, v);
+
+    //     JSAtomStruct *p;
+    }
+
+    fn free_atom_struct(self: *Selc, atom: *JSAtomStruct) void {
+        // atom index
+        var i = atom.hash_next;
+
+        // TODO: Rework to use hash table
+        if (atom.atom_type != .JS_ATOM_TYPE_SYMBOL) {
+            
+        }
+
+    //     #if 0   /* JS_ATOM_NULL is not refcounted: __JS_AtomIsConst() includes 0 */
+    //     if (unlikely(i == JS_ATOM_NULL)) {
+    //         p->header.ref_count = INT32_MAX / 2;
+    //         return;
+    //     }
+    // #endif
+    //     uint32_t i = p->hash_next;  /* atom_index */
+    //     if (p->atom_type != JS_ATOM_TYPE_SYMBOL) {
+    //         JSAtomStruct *p0, *p1;
+    //         uint32_t h0;
+
+    //         h0 = p->hash & (rt->atom_hash_size - 1);
+    //         i = rt->atom_hash[h0];
+    //         p1 = rt->atom_array[i];
+    //         if (p1 == p) {
+    //             rt->atom_hash[h0] = p1->hash_next;
+    //         } else {
+    //             for(;;) {
+    //                 assert(i != 0);
+    //                 p0 = p1;
+    //                 i = p1->hash_next;
+    //                 p1 = rt->atom_array[i];
+    //                 if (p1 == p) {
+    //                     p0->hash_next = p1->hash_next;
+    //                     break;
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     /* insert in free atom list */
+    //     rt->atom_array[i] = atom_set_free(rt->atom_free_index);
+    //     rt->atom_free_index = i;
+    //     /* free the string structure */
+    // #ifdef DUMP_LEAKS
+    //     list_del(&p->link);
+    // #endif
+    //     js_free_rt(rt, p);
+    //     rt->atom_count--;
+    //     assert(rt->atom_count >= 0);
+    }
+
+    
 };
+
+fn atom_is_const(atom: JSAtom) bool {
+        return atom < JSAtomEnum.JS_ATOM_END;
+//         static inline BOOL __JS_AtomIsConst(JSAtom v)
+// {
+// #if defined(DUMP_LEAKS) && DUMP_LEAKS > 1
+//         return (int32_t)v <= 0;
+// #else
+//         return (int32_t)v < JS_ATOM_END;
+// #endif
+// }
+    }
 
 test "JSRuntime - init" {
     {
@@ -2878,6 +3876,26 @@ test "JSRuntime - new_context()" {
         var context = try runtime.new_context();
 
         testing.expect(runtime.gc_obj_list.len == 1);
+        testing.expect(context.header.data.ref_count == 1);
+    }
+}
+
+test "JSRuntime - run_gc()" {
+    {
+        // should not remove anything
+        var gpa = JSAllocator{};
+        defer _ = gpa.deinit();
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var context = try runtime.new_context();
+
+        runtime.run_gc();
+
+        testing.expect(runtime.gc_obj_list.len == 1);
+        testing.expect(runtime.tmp_obj_list.len == 0);
+        testing.expect(runtime.gc_zero_ref_count_list.len == 0);
         testing.expect(context.header.data.ref_count == 1);
     }
 }
