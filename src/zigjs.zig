@@ -178,7 +178,7 @@ const JSValue = union(JSTag) {
 
 const JSAtom = u32;
 
-const JSAtomEnum = enum {
+const JSAtomEnum = enum(u32) {
     JS_ATOM_NULL,
 
     // /* Note: first atoms are considered as keywords in the parser */
@@ -445,7 +445,7 @@ const JSAtomEnum = enum {
 /// Increments the refcount of the given atom.
 fn JS_DupAtom(atom: JSAtom, context: *JSContext) JSAtom {
     if (!atom_is_const(atom)) {
-        if (context.runtime.atom_hash.get(atom)) |*atomData| {
+        if (context.runtime.atom_hash.get(atom)) |atomData| {
             atomData.header.ref_count += 1;
         }
     }
@@ -974,8 +974,8 @@ const JSArrayType = enum {
 };
 
 const JSArray = union(JSArrayType) {
-    FAST = JSFastArray,
-    SLOW = JSValue
+    FAST: JSFastArray,
+    SLOW: JSValue
 };
 
 // typedef struct JSPromiseReactionData {
@@ -1001,7 +1001,7 @@ const JSObjectData = union(JSClassEnum) {
     JS_CLASS_FLOAT64_ARRAY: *JSCTypedArray(f64),
     JS_CLASS_DATAVIEW: *JSCTypedArray(JSValue),
 
-    JS_CLASS_ARRAY: *JSArray,
+    JS_CLASS_ARRAY: JSArray,
 
     // TODO: Support BigNum
     // JS_CLASS_FLOAT_ENV: *JSFloatEnv,
@@ -1195,7 +1195,7 @@ const JSObject = struct {
     /// used in JS_WriteObjectRec()
     tmp_mark: bool,
 
-    // class_id: u16,
+    class_id: u16,
 
     shape: *JSShape,
     properties: std.ArrayList(JSProperty),
@@ -1207,9 +1207,29 @@ const JSObject = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: *std.mem.Allocator, context: *JSContext, class_id: JSClassEnum, shape: *JSShape) !*Self {
+    /// Creates a new JSObject and returns a pointer to the newly allocated memory.
+    /// Attaches the new object to the given context.
+    /// The context owns the new object.
+    pub fn newObject(context: *JSContext, shape: *JSShape) !*Self {
+        const self = try Self.initObject(&context.runtime.allocator.allocator, context, shape);
+        context.runtime.add_gc_obj(&self.header);
+        return self;
+    }
+
+    /// Creates a new JS_CLASS_OBJECT object and returns a pointer to the newly allocated memory.
+    /// The callee owns the new object.
+    pub fn initObject(allocator: *std.mem.Allocator, context: *JSContext, shape: *JSShape) !*Self {
+        return Self.init(allocator, context, @enumToInt(JSClassEnum.JS_CLASS_OBJECT), shape);
+    }
+
+    /// Initializes a new JSObject with the given class ID and returns a pointer to the newly allocated memory.
+    /// The callee owns the new object.
+    pub fn init(allocator: *std.mem.Allocator, context: *JSContext, class_id: u16, shape: *JSShape) !*Self {
         var self = try allocator.create(JSObject);
         errdefer allocator.destroy(self);
+        self.header = .{
+            .data = JSGCObjectHeader.init(.JS_GC_OBJ_TYPE_JS_OBJECT)
+        };
         self.extensible = true;
         self.free_mark = false;
         self.is_exotic = false;
@@ -1217,7 +1237,8 @@ const JSObject = struct {
         self.is_uncatchable_error = false;
         self.tmp_mark = false;
         self.shape = shape;
-        self.properties = try std.ArrayList(JSProperty).init(allocator);
+        self.properties = std.ArrayList(JSProperty).init(allocator);
+        self.class_id = class_id;
         errdefer self.properties.deinit();
         try self.properties.resize(shape.properties.items.len);
 
@@ -1244,24 +1265,25 @@ const JSObject = struct {
         // }
 
         switch(class_id) {
-            .JS_CLASS_OBJECT => {
+            @enumToInt(JSClassEnum.JS_CLASS_OBJECT) => {
                 self.data = JSObjectData{
                     .JS_CLASS_OBJECT = JS_NULL
                 };
             },
-            .JS_CLASS_ARRAY => {
+            @enumToInt(JSClassEnum.JS_CLASS_ARRAY) => {
                 self.is_exotic = true;
                 self.data = JSObjectData{
                     .JS_CLASS_ARRAY = .{
                         .FAST = JSFastArray.init(allocator)
                     }
                 };
-                var prop: *JSProperty = if (shape == context.array_shape) &self.properties[0] 
-                    else self.add_property(context, JSAtomEnum.JS_ATOM_length, JS_PROP_WRITABLE | JS_PROP_LENGTH);
+                var prop: *JSProperty = if (shape == context.array_shape) &self.properties.items[0] 
+                    else try self.add_property(context, @enumToInt(JSAtomEnum.JS_ATOM_length), JS_PROP_WRITABLE | JS_PROP_LENGTH);
                 prop.* = .{
                     .VALUE = JS_NewInt(0)
                 };
-            }
+            },
+            else => {}
         }
 
         //     switch(class_id) {
@@ -1327,6 +1349,8 @@ const JSObject = struct {
     //     p->header.ref_count = 1;
     //     add_gc_object(ctx->rt, &p->header, JS_GC_OBJ_TYPE_JS_OBJECT);
     //     return JS_MKPTR(JS_TAG_OBJECT, p);
+
+        return self;
     }
 
     /// Gets the initial shape hash for this object.
@@ -1339,6 +1363,11 @@ const JSObject = struct {
     pub fn duplicate(self: *Self) *JSObject {
         self.header.data.add_ref();
         return self;
+    }
+
+    /// Releases the resources owned by this object.
+    pub fn deinit(self: *Self) void {
+        self.properties.deinit();
     }
 
     /// Adds a new property to the current object's shape and returns a reference uninitialized JSProperty
@@ -1362,11 +1391,17 @@ const JSObject = struct {
             } else if(self.shape.header.data.ref_count != 1) {
                 // no matching shape and the current shape is shared.
                 // clone and modify the clone.
-                var newShape = self.shape.
+                var newShape = try self.shape.clone(context);
+
+                newShape.is_hashed = true;
+                try context.runtime.add_shape(newShape);
+                context.runtime.free_shape(self.shape);
+
+                self.shape = newShape;
             }
         }
 
-        self.add_shape_property(context, self.shape, property, flags);
+        try self.add_shape_property(context, self.shape, property, flags);
 
         return &self.properties.items[self.properties.items.len - 1];
         // JSShape *sh, *new_sh;
@@ -1483,6 +1518,33 @@ const JSObject = struct {
         // return 0;
     }
 };
+
+test "JSObject.newObject()" {
+    { // new empty object
+        var gpa = JSAllocator{};
+        defer std.testing.expect(!gpa.deinit());
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var context = try runtime.new_context();
+        defer context.deinit();
+
+        var shape = try JSShape.newFromProto(context, null);
+
+        var obj = try JSObject.newObject(context, shape);
+
+        var gc = get_gc_object(&obj.header);
+
+        testing.expect(gc.JS_GC_OBJ_TYPE_JS_OBJECT == obj);
+        testing.expect(obj.shape == shape);
+        testing.expect(obj.properties.items.len == 0);
+        testing.expect(obj.class_id == @enumToInt(JSClassEnum.JS_CLASS_OBJECT));
+        testing.expect(obj.header.next == null);
+        testing.expect(obj.header.prev == &shape.header);
+        testing.expect(runtime.gc_obj_list.last.? == &obj.header);
+    }
+}
 
 fn shape_initial_hash(shape: ?*JSObject) u32 {
     const ptr: usize = if (shape) |self| @ptrToInt(self) else 0;
@@ -2817,23 +2879,32 @@ const JSShape = struct {
     const Self = @This();
 
     /// Creates a new JSShape for the given context and prototype.
-    /// Returns a pointer to the newly allocated shape.
+    /// Returns a pointer to the new shape.
     /// The context owns the new shape.
+    pub fn newFromProto(ctx: *JSContext, proto: ?*JSObject) !*Self {
+        const self = try Self.initFromProto(ctx, proto);
+        ctx.runtime.add_gc_obj(&self.header);
+        try ctx.runtime.add_shape(self);
+        return self;
+    }
+
+    /// Creates a new JSShape for the given context and prototype.
+    /// Returns a pointer to the newly allocated shape.
+    /// Caller owns the new shape.
     pub fn initFromProto(ctx: *JSContext, proto: ?*JSObject) !*Self {
         return Self.initFromProtoWithSizes(ctx, proto, 4, 2);
     }
 
     /// Creates a new JSShape for the given context and prototype.
     /// Returns a pointer to the newly allocated shape.
-    /// The context owns the new shape.
-    pub fn initFromProtoWithSizes(ctx: *JSContext, proto: ?*JSObject, hash_size: u32, prop_size: u32) !*Self {
+    /// Caller owns the new shape.
+    pub fn initFromProtoWithSizes(ctx: *JSContext, proto: ?*JSObject, hash_size: u32, prop_size: usize) !*Self {
         const self = try ctx.runtime.allocator.allocator.create(Self);
         errdefer ctx.runtime.allocator.allocator.destroy(self);
         self.header = .{
             .data = JSGCObjectHeader.init(.JS_GC_OBJ_TYPE_SHAPE)
         };
         self.header.data.add_ref();
-        ctx.runtime.add_gc_obj(&self.header);
         self.proto = if (proto) |p| p.duplicate() else null;
         // self.prop_hash_mask = hash_size - 1;
         self.deleted_prop_count = 0;
@@ -2844,7 +2915,6 @@ const JSShape = struct {
         self.hash = shape_initial_hash(self.proto);
         self.is_hashed = true;
         self.has_small_array_index = false;
-        try ctx.runtime.add_shape(self);
 
         return self;
 
@@ -2885,6 +2955,7 @@ const JSShape = struct {
     /// Releases and frees resources that this shape owns.
     pub fn deinit(self: *Self) void {
         self.properties.deinit();
+        self.prop_hash.deinit();
     }
 
     /// Adds a reference to this shape
@@ -2894,7 +2965,8 @@ const JSShape = struct {
         return self;
     }
 
-    /// Clones this shape
+    /// Clones this shape.
+    /// The returned shape is owned by the JSContext.
     pub fn clone(self: *Self, context: *JSContext) !*JSShape {
         var newShape = try Self.initFromProtoWithSizes(context, self.proto, 0, self.properties.items.len);
         newShape.header.data.ref_count = 1;
@@ -2910,8 +2982,10 @@ const JSShape = struct {
         }
 
         for(newShape.properties.items) |*item| {
-            JS_DupAtom(item.atom, context);
+            _ = JS_DupAtom(item.atom, context);
         }
+
+        return newShape;
         // for(newShape.)
 
 
@@ -2959,7 +3033,7 @@ const JSShape = struct {
     }
 };
 
-test "JSShape - initFromProto()" {
+test "JSShape.initFromProto()" {
     { // null prototype
         var gpa = JSAllocator{};
         defer std.testing.expect(!gpa.deinit());
@@ -2971,6 +3045,7 @@ test "JSShape - initFromProto()" {
         defer context.deinit();
 
         var shape = try JSShape.initFromProto(context, null);
+        try runtime.add_shape(shape);
 
         testing.expect(shape.properties.capacity == 2);
         testing.expect(shape.properties.items.len == 0);
@@ -2982,6 +3057,35 @@ test "JSShape - initFromProto()" {
         
         var found = runtime.shape_hash.get(shape.hash);
         testing.expect(found.? == shape);
+    }
+}
+
+test "JSShape.clone()" {
+    { // null prototype
+        var gpa = JSAllocator{};
+        defer std.testing.expect(!gpa.deinit());
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var context = try runtime.new_context();
+        defer context.deinit();
+
+        var nullShape = try JSShape.initFromProto(context, null);
+        try runtime.add_shape(nullShape);
+
+        var clone = try nullShape.clone(context);
+        defer gpa.allocator.destroy(clone);
+        defer clone.deinit();
+
+        testing.expect(clone.header.data.ref_count == 1);
+        testing.expect(clone.is_hashed == false);
+        testing.expect(clone.deleted_prop_count == 0);
+        testing.expect(clone.has_small_array_index == false);
+        testing.expect(clone.proto == null);
+        
+        var found = runtime.shape_hash.get(nullShape.hash);
+        testing.expect(found.? == nullShape);
     }
 }
 
@@ -3326,14 +3430,14 @@ fn gc_scan_incref_child2(runtime: *JSRuntime, header: *JSGCObjectHeaderNode) voi
     header.data.ref_count += 1;
     // p->ref_count++;
 }
-fn get_atom_hash(hash: u30) u64 {
+fn get_atom_hash(hash: JSAtom) u64 {
     return @intCast(u64, hash);
 }
 
-fn are_atom_hashes_equal(first: u30, second: u30) bool {
+fn are_atom_hashes_equal(first: JSAtom, second: JSAtom) bool {
     return true;
 }
-const AtomHashMap = std.HashMap(u30, *JSAtomStruct, get_atom_hash, are_atom_hashes_equal, std.hash_map.default_max_load_percentage);
+const AtomHashMap = std.HashMap(JSAtom, *JSAtomStruct, get_atom_hash, are_atom_hashes_equal, std.hash_map.default_max_load_percentage);
 
 const JSRuntime = struct {
     allocator: *JSAllocator,
@@ -3421,14 +3525,42 @@ const JSRuntime = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.classes.deinit();
-        self.context_list.deinit();
         var shape_it = self.shape_hash.iterator();
         while(shape_it.next()) |kv| {
+            self.remove_gc_obj(&kv.value.header);
             kv.value.deinit();
             self.allocator.allocator.destroy(kv.value);
         }
         self.shape_hash.deinit();
+
+        // free all remaining objects
+        var node = self.gc_obj_list.first;
+        while(node) |header| {
+            const gc_obj = get_gc_object(header);
+            
+            node = header.next;
+            self.remove_gc_obj(header);
+            
+            switch(gc_obj) {
+                .JS_GC_OBJ_TYPE_JS_OBJECT => |object| {
+                    object.deinit();
+                    self.allocator.allocator.destroy(object);
+                },
+                // .JS_GC_OBJ_TYPE_SHAPE => |shape| {
+
+                // },
+                .JS_GC_OBJ_TYPE_JS_CONTEXT => |context| {
+                },
+                else => {
+                    // self.tmp_obj_list.remove(obj);
+                    // self.gc_zero_ref_count_list.append(obj);
+                    unreachable;
+                }
+            }
+        }
+
+        self.classes.deinit();
+        self.context_list.deinit();
     }
 
     /// Creates a new JSContext and returns a pointer to it.
@@ -3488,7 +3620,7 @@ const JSRuntime = struct {
     /// Removes the given shape from the shape hash table.
     /// Once removed, the caller owns the shape.
     pub fn remove_shape(self: *Self, shape: *JSShape) void {
-        self.shape_hash.remove(shape.hash);
+        _ = self.shape_hash.remove(shape.hash);
     }
 
     /// Runs a Garbage Collection pass if there is more allocated space
@@ -3710,7 +3842,7 @@ const JSRuntime = struct {
 
                 // mark all the fields
                 for(shape.properties.items) |*propertyShape, i| {
-                    var prop = &obj.properties[i];
+                    var prop = &obj.properties.items[i];
                     if (propertyShape.atom != @enumToInt(JSAtomEnum.JS_ATOM_NULL)) {
                         switch(prop.*) {
                             .GETSET => |*getset| {
@@ -4047,9 +4179,9 @@ const JSRuntime = struct {
         // free all the fields
         var shape = obj.shape;
         for(shape.properties.items) |*shapeProp, i| {
-            self.free_property(&obj.properties[i], shapeProp.flags);
+            self.free_property(&obj.properties.items[i], shapeProp.flags);
         }
-        self.allocator.allocator.free(obj.properties);
+        obj.properties.deinit();
 
         // as an optimization we destroy the shape immediately
         // without putting it in gc_zero_ref_count_list
