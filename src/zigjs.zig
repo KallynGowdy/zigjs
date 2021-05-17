@@ -1,4 +1,5 @@
 const std = @import("std");
+const unicode = @import("unicode.zig");
 const testing = std.testing;
 
 const JSClassEnum = enum(u16) {
@@ -177,6 +178,7 @@ const JSValue = union(JSTag) {
 };
 
 const JSAtom = u32;
+const JSAtomHash = u32;
 
 const JSAtomEnum = enum(u32) {
     JS_ATOM_NULL,
@@ -445,9 +447,7 @@ const JSAtomEnum = enum(u32) {
 /// Increments the refcount of the given atom.
 fn JS_DupAtom(atom: JSAtom, context: *JSContext) JSAtom {
     if (!atom_is_const(atom)) {
-        if (context.runtime.atom_hash.get(atom)) |atomData| {
-            atomData.header.ref_count += 1;
-        }
+        context.runtime.atom_array.items[atom].header.ref_count += 1;
     }
 
     return atom;
@@ -1057,7 +1057,7 @@ const JSCBytecodeFunctionData = struct {
     home_object: *JSObject,
 };
 
-const JSCFunctionEnum = enum {
+const JSCFunctionEnum = enum(u8) {
     JS_CFUNC_generic,
     JS_CFUNC_generic_magic,
     JS_CFUNC_constructor,
@@ -1079,12 +1079,12 @@ const JS_C_FunctionData = struct {
     realm: *JSContext,
     c_function: JSCFunctionType,
     length: u8,
-    cproto: u8,
+    cproto: JSCFunctionEnum,
     magic: u16,
 };
 
 const JSCFunctionType = union(JSCFunctionEnum) {
-    JS_CFUNC_generic: *JSCFunction,
+    JS_CFUNC_generic: JSCFunction,
     JS_CFUNC_generic_magic: *JSCFunctionMagic,
     JS_CFUNC_constructor: *JSCFunction,
     JS_CFUNC_constructor_magic: *fn(ctx: *JSContext, new_target: JSValue, args: []JSValue, magic: i32) JSValue,
@@ -1174,9 +1174,94 @@ const JSCFunctionType = union(JSCFunctionEnum) {
 /// Used by the shape system to allow reusing memory when describing object metadata.
 /// See https://marcradziwill.com/blog/mastering-javascript-high-performance/
 fn shape_hash(h: u32, val: u32) u32 {
+    var result: u32 = 0;
+    var addition: u32 = 0;
+    _ = @addWithOverflow(u32, h, val, &addition);
+    
     // uses same magic hash multiplier as the Linux kernel
-    return (h + val) * 0x9e370001;
+    _ = @mulWithOverflow(u32, addition,0x9e370001, &result);
+
+    return result;
 }
+
+fn hash_string_T(comptime T: type, str: []const T, h: u32) u32 {
+    var result: u32 = h;
+    for(str) |char| {
+        _ = @mulWithOverflow(u32, h, 263, &result);
+        _ = @addWithOverflow(u32, result, @as(u32, char), &result);
+    }
+    return result;
+}
+
+// static inline uint32_t hash_string8(const uint8_t *str, size_t len, uint32_t h)
+// {
+//     size_t i;
+
+//     for(i = 0; i < len; i++)
+//         h = h * 263 + str[i];
+//     return h;
+// }
+
+// static inline uint32_t hash_string16(const uint16_t *str,
+//                                      size_t len, uint32_t h)
+// {
+//     size_t i;
+
+//     for(i = 0; i < len; i++)
+//         h = h * 263 + str[i];
+//     return h;
+// }
+
+/// Calculates the hashcode for the given string.
+/// Used by the system to allow reusing property names for objects.
+fn hash_string(str: *JSString, h: u32) u32 {
+    switch(str.val) {
+        ._8_BIT => |val| {
+            return hash_string_T(u8, val[0..], h);
+        },
+        ._16_BIT => |val| {
+            return hash_string_T(u16, val.items[0..], h);
+        }
+    }
+}
+
+test "hash_string()" {
+    {
+        var gpa = JSAllocator{};
+        defer std.testing.expect(!gpa.deinit());
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var string = try JSString.initFromUtf8(&runtime, "abcdef", .JS_ATOM_TYPE_STRING);
+        defer runtime.allocator.allocator.destroy(string);
+        defer string.deinit(&runtime);
+
+        testing.expectEqual(@as(u32, 102), hash_string(string, 0));
+    }
+    {
+        var gpa = JSAllocator{};
+        defer std.testing.expect(!gpa.deinit());
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var string = try JSString.initFromUtf8(&runtime, "😀", .JS_ATOM_TYPE_STRING);
+        defer runtime.allocator.allocator.destroy(string);
+        defer string.deinit(&runtime);
+
+        testing.expectEqual(@as(u32, 56832), hash_string(string, 0));
+    }
+}
+
+// static uint32_t hash_string(const JSString *str, uint32_t h)
+// {
+//     if (str->is_wide_char)
+//         h = hash_string16(str->u.str16, str->len, h);
+//     else
+//         h = hash_string8(str->u.str8, str->len, h);
+//     return h;
+// }
 
 const JSObject = struct {
     header: JSGCObjectHeaderNode,
@@ -1220,6 +1305,15 @@ const JSObject = struct {
     /// The callee owns the new object.
     pub fn initObject(allocator: *std.mem.Allocator, context: *JSContext, shape: *JSShape) !*Self {
         return Self.init(allocator, context, @enumToInt(JSClassEnum.JS_CLASS_OBJECT), shape);
+    }
+
+    /// Creates a new JSObject with the given class ID and shape.
+    /// Attaches the new object to the given context.
+    /// The context owns the new object.
+    pub fn new(context: *JSContext, class_id: u16, shape: *JSShape) !*Self {
+        const self = try Self.init(&context.runtime.allocator.allocator, context, class_id, shape);
+        context.runtime.add_gc_obj(&self.header);
+        return self;
     }
 
     /// Initializes a new JSObject with the given class ID and returns a pointer to the newly allocated memory.
@@ -1283,7 +1377,9 @@ const JSObject = struct {
                     .VALUE = JS_NewInt(0)
                 };
             },
-            else => {}
+            else => {
+                unreachable;
+            }
         }
 
         //     switch(class_id) {
@@ -2200,18 +2296,191 @@ const JSStringType = enum {
 
 const JSStringValue = union(JSStringType) {
     _8_BIT: []u8,
-    _16_BIT: []u16,
+    _16_BIT: std.ArrayList(u16),
 };
 
-const JSString = struct {
+/// Defines a struct that contains extra information about user-defined atoms.
+/// Atoms are a special way to represent different pieces of data that are repeatedly used througout
+/// a JavaScript program. For example, property names are represented as atoms so that getting a property value
+/// can be as simple as an array index lookup instead of a hash table lookup.
+///
+/// Atoms come in two major forms: built-in, and user-defined.
+/// - built-in atoms represent commonly used keywords (like "if" and "function") and properties (like "length" and "globalThis") that are bound to be
+/// used by almost any JS program.
+/// - user-defined atoms represent symbols and properties that are defined by the user. Because they are not built-in, we need a way to
+/// store the name of the atom so that it can be looked up later for common operations like Object.keys() or error messages. Additionally
+/// user-defined atoms are a way to ensure that strings are de-duplicated and don't take up crazy amounts of space.
+///
+/// user-defined atoms work in three different forms: strings, symbols, and global symbols.
+/// both strings and symbols use the same format for storing character data: ASCII or UTF-16 based on if the data fits.
+/// - both strings and global symbols use a hashcode for lookup. The hashcode is calculated based on the string content and atom type and is used to lookup the atom index.
+/// - symbols are unique, and therefore do not use content-based lookup. Instead, they are always referenced by the atom index.
+const JSAtomData = struct {
     header: JSRefCountHeader,
-    hash: u30,
-    hash_next: u30,
+    // hash: u30,
+    // hash_next: u30,
     val: JSStringValue,
-    atom_type: AtomType
+    atom_type: AtomType,
+
+    const Self = @This();
+
+    /// Creates a new JSString from the given buffer of ASCII or UTF-8 data.
+    /// The returned string contains a copy of the buffer and is owned by the callee.
+    pub fn initFromBuffer(runtime: *JSRuntime, buf: []const u8, atom_type: AtomType) !*Self {
+        // opportunistically try to read the UTF-8 string as ASCII
+        var is_ascii = true;
+        for(buf) |char, i| {
+            if (char > 128) {
+                is_ascii = false;
+                break;
+            }
+        }
+
+        return if (is_ascii) try JSString.initFromASCII(runtime, buf, atom_type) else try JSString.initFromUtf8(runtime, buf, atom_type);
+    }
+
+    /// Creates a new JSString with a copy of the given ASCII string data.
+    /// The callee owns the returned data.
+    pub fn initFromASCII(runtime: *JSRuntime, ascii: []const u8, atom_type: AtomType) !*Self {
+        var self = try runtime.allocator.allocator.create(Self);
+        self.header = .{
+            .ref_count = 1
+        };
+        self.atom_type = atom_type;
+
+        
+        var data = try runtime.allocator.allocator.dupe(u8, ascii[0..]);
+        self.val = .{
+            ._8_BIT = data
+        };
+
+        return self;
+    }
+
+    /// Creates a new JSString with a copy of the given UTF-8 string data.
+    /// The callee owns the returned data.
+    pub fn initFromUtf8(runtime: *JSRuntime, utf8: []const u8, atom_type: AtomType) !*Self {
+        var self = try runtime.allocator.allocator.create(Self);
+        self.header = .{
+            .ref_count = 1
+        };
+        self.atom_type = atom_type;
+
+        var data = try unicode.utf8ToUtf16LeAlloc(&runtime.allocator.allocator, utf8);
+        self.val = .{
+            ._16_BIT = data
+        };
+
+        return self;
+    }
+
+    /// Deallocates any resources owned by this string.
+    pub fn deinit(self: *Self, runtime: *JSRuntime) void {
+        switch(self.val) {
+            ._16_BIT => |list| {
+                list.deinit();
+            },
+            ._8_BIT => |data| {
+                runtime.allocator.allocator.free(data);
+            }
+        }
+    }
 };
 
-const JSAtomStruct = JSString;
+const JSString = JSAtomData;
+
+test "JSString.initFromBuffer()" {
+    {
+        var gpa = JSAllocator{};
+        defer std.testing.expect(!gpa.deinit());
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var string = try JSString.initFromBuffer(&runtime, "abcdef", .JS_ATOM_TYPE_STRING);
+        defer runtime.allocator.allocator.destroy(string);
+        defer string.deinit(&runtime);
+
+        testing.expect(string.atom_type == .JS_ATOM_TYPE_STRING);
+        testing.expect(string.val == ._8_BIT);
+        
+        switch(string.val) {
+            ._8_BIT => |val| {
+                testing.expectEqualStrings(val, "abcdef");
+            },
+            else => unreachable
+        }
+    }
+    {
+        var gpa = JSAllocator{};
+        defer std.testing.expect(!gpa.deinit());
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var string = try JSString.initFromBuffer(&runtime, "😀", .JS_ATOM_TYPE_SYMBOL);
+        defer runtime.allocator.allocator.destroy(string);
+        defer string.deinit(&runtime);
+
+        testing.expect(string.atom_type == .JS_ATOM_TYPE_SYMBOL);
+        testing.expect(string.val == ._16_BIT);
+        
+        switch(string.val) {
+            ._16_BIT => |val| {
+                testing.expectEqualSlices(u16, val.items, &std.unicode.utf8ToUtf16LeStringLiteral("😀").*);
+            },
+            else => unreachable
+        }
+    }
+}
+
+test "JSString.initFromASCII()" {
+    {
+        var gpa = JSAllocator{};
+        defer std.testing.expect(!gpa.deinit());
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var string = try JSString.initFromASCII(&runtime, "abcdef", .JS_ATOM_TYPE_STRING);
+        defer runtime.allocator.allocator.destroy(string);
+        defer string.deinit(&runtime);
+
+        testing.expect(string.atom_type == .JS_ATOM_TYPE_STRING);
+        testing.expect(string.val == ._8_BIT);
+        
+        switch(string.val) {
+            ._8_BIT => |val| {
+                testing.expectEqualStrings(val, "abcdef");
+            },
+            else => unreachable
+        }
+    }
+}
+
+test "JSString.initFromUtf8()" {
+    {
+        var gpa = JSAllocator{};
+        defer std.testing.expect(!gpa.deinit());
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var string = try JSString.initFromUtf8(&runtime, "abcdef", .JS_ATOM_TYPE_STRING);
+        defer runtime.allocator.allocator.destroy(string);
+        defer string.deinit(&runtime);
+
+        testing.expect(string.atom_type == .JS_ATOM_TYPE_STRING);
+        testing.expect(string.val == ._16_BIT);
+        
+        switch(string.val) {
+            ._16_BIT => |val| {
+                testing.expectEqualSlices(u16, val.items, &std.unicode.utf8ToUtf16LeStringLiteral("abcdef").*);
+            },
+            else => unreachable
+        }
+    }
+}
 
 // struct JSString {
 //     JSRefCountHeader header; /* must come first, 32-bit */
@@ -3058,6 +3327,33 @@ test "JSShape.initFromProto()" {
         var found = runtime.shape_hash.get(shape.hash);
         testing.expect(found.? == shape);
     }
+
+    { // other prototype
+        var gpa = JSAllocator{};
+        defer std.testing.expect(!gpa.deinit());
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var context = try runtime.new_context();
+        defer context.deinit();
+
+        var protoShape = try JSShape.newFromProto(context, null);
+        var proto = try JSObject.newObject(context, protoShape);
+
+        var shape = try JSShape.newFromProto(context, proto);
+
+        testing.expect(shape.properties.capacity == 2);
+        testing.expect(shape.properties.items.len == 0);
+        testing.expect(shape.header.data.ref_count == 1);
+        testing.expect(shape.is_hashed == true);
+        testing.expect(shape.deleted_prop_count == 0);
+        testing.expect(shape.has_small_array_index == false);
+        testing.expect(shape.proto == proto);
+        
+        var found = runtime.shape_hash.get(shape.hash);
+        testing.expect(found.? == shape);
+    }
 }
 
 test "JSShape.clone()" {
@@ -3198,7 +3494,7 @@ const JSContext = struct {
             .interrupt_counter = 10000,
         };
 
-        self.add_intrinsic_basic_objects();
+        // self.add_intrinsic_basic_objects();
 
         return self;
     }
@@ -3207,17 +3503,103 @@ const JSContext = struct {
         self.class_proto.deinit();
     }
 
-    pub fn add_intrinsic_basic_objects(self: *Self) void {
+    pub fn duplicate(self: *Self) *Self {
+        self.header.data.add_ref();
+        return self;
+    }
+
+    pub fn add_intrinsic_basic_objects(self: *Self) !void {
         
+        var objectClass = self.new_object_proto(JS_NULL);
+        try self.class_proto.append(objectClass);
+
+        // self.function_proto = self.new_object_proto
+
+    }
+
+    pub fn new_cfunction(self: *JSContext, func: JSCFunction, name: []const u8, length: u8, cproto: JSCFunctionEnum, magic: i32, proto: JSValue) !JSValue {
+        var func_obj = try self.new_object_proto_class(proto, .JS_CLASS_C_FUNCTION);
+        
+        switch(func_obj) {
+            .JS_TAG_OBJECT => |obj| {
+
+                switch(obj.data) {
+                    .JS_CLASS_C_FUNCTION => |*func_data| {
+                        func_data.realm = self.duplicate();
+                        func_data.c_function = .{
+                            .JS_CFUNC_generic = func
+                        };
+                        func_data.length = length;
+                        func_data.magic = magic;
+                        func_data.cproto = cproto;
+                    },
+                    else => {
+                        unreachable;
+                    }
+                }
+
+                obj.is_constructor = (cproto == .JS_CFUNC_constructor or
+                         cproto == .JS_CFUNC_constructor_magic or
+                         cproto == .JS_CFUNC_constructor_or_func or
+                         cproto == .JS_CFUNC_constructor_or_func_magic);
+            },
+            else => unreachable
+        }
+
+        // JSValue func_obj;
+        // JSObject *p;
+        // JSAtom name_atom;
+        
+        // func_obj = JS_NewObjectProtoClass(ctx, proto_val, JS_CLASS_C_FUNCTION);
+        // if (JS_IsException(func_obj))
+        //     return func_obj;
+        // p = JS_VALUE_GET_OBJ(func_obj);
+        // p->u.cfunc.realm = JS_DupContext(ctx);
+        // p->u.cfunc.c_function.generic = func;
+        // p->u.cfunc.length = length;
+        // p->u.cfunc.cproto = cproto;
+        // p->u.cfunc.magic = magic;
+        // p->is_constructor = (cproto == JS_CFUNC_constructor ||
+        //                     cproto == JS_CFUNC_constructor_magic ||
+        //                     cproto == JS_CFUNC_constructor_or_func ||
+        //                     cproto == JS_CFUNC_constructor_or_func_magic);
+        // if (!name)
+        //     name = "";
+        // name_atom = JS_NewAtom(ctx, name);
+        // js_function_set_properties(ctx, func_obj, name_atom, length);
+        // JS_FreeAtom(ctx, name_atom);
+        // return func_obj;
+    }
+
+    /// Creates a new atom with the given name and returns the identifier for it.
+    pub fn new_atom(self: *Self, name: []const u8) !JSAtom {
+
+        var str = try JSString.initFromBuffer(self, name);
+
+
+
+        
+
+        // JSValue val;
+
+        // if (len == 0 || !is_digit(*str)) {
+        //     JSAtom atom = __JS_FindAtom(ctx->rt, str, len, JS_ATOM_TYPE_STRING);
+        //     if (atom)
+        //         return atom;
+        // }
+        // val = JS_NewStringLen(ctx, str, len);
+        // if (JS_IsException(val))
+        //     return JS_ATOM_NULL;
+        // return JS_NewAtomStr(ctx, JS_VALUE_GET_STRING(val));
     }
 
     /// Creates a new value from the given prototype with the given class.
     /// This can be useful for creating objects/arrays and other primitive values with a specific prototype.
     /// Returns a value that points to the created value.
-    pub fn new_object_proto_class(self: *Self, proto_val: JSValue, class: JSClassEnum) JSValue {
+    pub fn new_object_proto_class(self: *Self, proto_val: JSValue, class: JSClassEnum) !JSValue {
         var proto: *JSObject = if (proto_val == .JS_CLASS_OBJECT) |obj| obj else unreachable;
         var foundShape: ?*JSShape = self.runtime.find_shape_for_proto(proto);
-        var shape = if (foundShape) |shape| shape.duplicate() else try JSShape.initFromProto(self, proto);
+        var shape = if (foundShape) |shape| shape.duplicate() else try JSShape.newFromProto(self, proto);
         return self.new_object_from_shape(shape, class);
 
     //     JSShape *sh;
@@ -3244,15 +3626,43 @@ const JSContext = struct {
     /// Creates a new object from the given shape and class.
     /// Returns a value that points to the new object.
     pub fn new_object_from_shape(self: *Self, shape: *JSShape, class: JSClassEnum) !JSValue {
-        self.runtime.trigger_gc();
+        self.runtime.trigger_gc(@sizeOf(JSObject));
 
-        var obj = try JSObject.init(&self.runtime.allocator.allocator, @enumToInt(class), shape);
-        
+        var obj = try JSObject.new(self, @enumToInt(class), shape);
 
-    
+        return JSValue{
+            .JS_TAG_OBJECT = obj
+        };
     }
 };
 
+test "JSContext.new_object_from_shape()" {
+    {
+        var gpa = JSAllocator{};
+        defer std.testing.expect(!gpa.deinit());
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var context = try runtime.new_context();
+        defer context.deinit();
+
+        var shape = try JSShape.newFromProto(context, null);
+
+        var obj = try context.new_object_from_shape(shape, .JS_CLASS_OBJECT);
+
+        testing.expect(obj == .JS_TAG_OBJECT);
+        switch(obj) {
+            .JS_TAG_OBJECT => |o| {
+                testing.expect(o.shape == shape);
+                testing.expect(o.properties.items.len == o.shape.properties.items.len);
+                testing.expect(o.class_id == @enumToInt(JSClassEnum.JS_CLASS_OBJECT));
+                testing.expect(runtime.gc_obj_list.len == 3);
+            },
+            else => unreachable,
+        }
+    }
+}
 
 
 // struct JSContext {
@@ -3430,14 +3840,9 @@ fn gc_scan_incref_child2(runtime: *JSRuntime, header: *JSGCObjectHeaderNode) voi
     header.data.ref_count += 1;
     // p->ref_count++;
 }
-fn get_atom_hash(hash: JSAtom) u64 {
-    return @intCast(u64, hash);
-}
 
-fn are_atom_hashes_equal(first: JSAtom, second: JSAtom) bool {
-    return true;
-}
-const AtomHashMap = std.HashMap(JSAtom, *JSAtomStruct, get_atom_hash, are_atom_hashes_equal, std.hash_map.default_max_load_percentage);
+const AtomHashMap = std.AutoHashMap(JSAtomHash, JSAtom);
+const AtomList = std.ArrayList(*JSAtomData);
 
 const JSRuntime = struct {
     allocator: *JSAllocator,
@@ -3482,8 +3887,11 @@ const JSRuntime = struct {
     /// This is automatically adjusted whenever garbage collection is triggered.
     gc_threshold: usize,
 
-    // TODO: Rework to use hash table
+    /// The hash map that is used to map atom string hashes to array indices.
     atom_hash: AtomHashMap,
+
+    /// The atom list that is used to store the atom strings.
+    atom_array: AtomList,
     
 // #ifdef CONFIG_BIGNUM
 //     bf_context_t bf_ctx;
@@ -3520,6 +3928,7 @@ const JSRuntime = struct {
             .sab_funcs = null,
             .shape_hash = ShapeHashMap.init(&allocator.allocator),
             .atom_hash = AtomHashMap.init(&allocator.allocator),
+            .atom_array = AtomList.init(&allocator.allocator),
             .gc_threshold = 256 * 1024
         };
     }
@@ -3561,6 +3970,13 @@ const JSRuntime = struct {
 
         self.classes.deinit();
         self.context_list.deinit();
+
+        for(self.atom_array.items) |data| {
+            self.destroy_atom_data(data);
+        }
+
+        self.atom_hash.deinit();
+        self.atom_array.deinit();
     }
 
     /// Creates a new JSContext and returns a pointer to it.
@@ -3580,6 +3996,34 @@ const JSRuntime = struct {
         context_ptr.header.data.add_ref();
 
         return context_ptr;
+    }
+
+    /// Finds or creates a new atom from the given atom data.
+    /// If the atom is a string, then a search will be made for another atom that has the same
+    /// hashcode.
+    /// If the atom is a symbol, then a new atom index will be returned.
+    /// Calling this function gives the runtime ownership of the given string.
+    pub fn new_atom_from_data(self: *Self, data: *JSAtomData) !JSAtom {
+        const index: u32 = @intCast(u32, self.atom_array.items.len);
+        if (data.atom_type == .JS_ATOM_TYPE_STRING or data.atom_type == .JS_ATOM_TYPE_GLOBAL_SYMBOL) {
+            const hash = hash_string(data, @as(u32, @enumToInt(data.atom_type)));
+
+            if (self.atom_hash.get(hash)) |result| {
+                self.destroy_atom_data(data);
+                return result;
+            }
+
+            try self.atom_hash.put(hash, index);
+        }
+        
+        try self.atom_array.append(data);
+        return index;
+    }
+
+    /// Deinitializes and destroys the given atom data.
+    fn destroy_atom_data(self: *Self, data: *JSAtomData) void {
+        data.deinit(self);
+        self.allocator.allocator.destroy(data);
     }
 
     /// Adds the given GC Object header to the list of objects
@@ -4394,7 +4838,7 @@ const JSRuntime = struct {
     //     JSAtomStruct *p;
     }
 
-    fn free_atom_struct(self: *Self, atom: *JSAtomStruct) void {
+    fn free_atom_struct(self: *Self, atom: *JSAtomData) void {
         if (atom.atom_type != .JS_ATOM_TYPE_SYMBOL) {
             self.atom_hash.remove(atom.hash);
             self.allocator.allocator.destroy(atom);
@@ -4513,6 +4957,113 @@ test "JSRuntime - run_gc()" {
         testing.expect(runtime.tmp_obj_list.len == 0);
         testing.expect(runtime.gc_zero_ref_count_list.len == 0);
         testing.expect(context.header.data.ref_count == 1);
+    }
+}
+
+test "JSRuntime - new_atom_from_data()" {
+    {
+        // should add new strings
+        var gpa = JSAllocator{};
+        defer _ = gpa.deinit();
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var data = try JSAtomData.initFromBuffer(&runtime, "abc", .JS_ATOM_TYPE_STRING);
+        const atom = try runtime.new_atom_from_data(data);
+
+        testing.expect(atom == 0);
+        testing.expectEqual(runtime.atom_array.items.len, 1);
+        testing.expectEqual(runtime.atom_hash.count(), 1);
+    }
+    {
+        // de-duplicate strings
+        var gpa = JSAllocator{};
+        defer _ = gpa.deinit();
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var data1 = try JSAtomData.initFromBuffer(&runtime, "abc", .JS_ATOM_TYPE_STRING);
+        const atom1 = try runtime.new_atom_from_data(data1);
+
+        var data2 = try JSAtomData.initFromBuffer(&runtime, "abc", .JS_ATOM_TYPE_STRING);
+        const atom2 = try runtime.new_atom_from_data(data2);
+
+        testing.expectEqual(atom1, 0);
+        testing.expectEqual(atom2, 0);
+        testing.expectEqual(runtime.atom_array.items.len, 1);
+        testing.expectEqual(runtime.atom_hash.count(), 1);
+    }
+
+    {
+        // should add new global symbols
+        var gpa = JSAllocator{};
+        defer _ = gpa.deinit();
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var data = try JSAtomData.initFromBuffer(&runtime, "abc", .JS_ATOM_TYPE_GLOBAL_SYMBOL);
+        const atom = try runtime.new_atom_from_data(data);
+
+        testing.expect(atom == 0);
+        testing.expectEqual(runtime.atom_array.items.len, 1);
+        testing.expectEqual(runtime.atom_hash.count(), 1);
+    }
+    {
+        // de-duplicate global symbols
+        var gpa = JSAllocator{};
+        defer _ = gpa.deinit();
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var data1 = try JSAtomData.initFromBuffer(&runtime, "abc", .JS_ATOM_TYPE_GLOBAL_SYMBOL);
+        const atom1 = try runtime.new_atom_from_data(data1);
+
+        var data2 = try JSAtomData.initFromBuffer(&runtime, "abc", .JS_ATOM_TYPE_GLOBAL_SYMBOL);
+        const atom2 = try runtime.new_atom_from_data(data2);
+
+        testing.expectEqual(atom1, 0);
+        testing.expectEqual(atom2, 0);
+        testing.expectEqual(runtime.atom_array.items.len, 1);
+        testing.expectEqual(runtime.atom_hash.count(), 1);
+    }
+
+    {
+        // should add new symbols
+        var gpa = JSAllocator{};
+        defer _ = gpa.deinit();
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var data = try JSAtomData.initFromBuffer(&runtime, "abc", .JS_ATOM_TYPE_SYMBOL);
+        const atom = try runtime.new_atom_from_data(data);
+
+        testing.expect(atom == 0);
+        testing.expectEqual(runtime.atom_array.items.len, 1);
+        testing.expectEqual(runtime.atom_hash.count(), 0);
+    }
+    {
+        // duplicate symbols
+        var gpa = JSAllocator{};
+        defer _ = gpa.deinit();
+
+        var runtime = JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var data1 = try JSAtomData.initFromBuffer(&runtime, "abc", .JS_ATOM_TYPE_SYMBOL);
+        const atom1 = try runtime.new_atom_from_data(data1);
+
+        var data2 = try JSAtomData.initFromBuffer(&runtime, "abc", .JS_ATOM_TYPE_SYMBOL);
+        const atom2 = try runtime.new_atom_from_data(data2);
+
+        testing.expectEqual(atom1, 0);
+        testing.expectEqual(atom2, 1);
+        testing.expectEqual(runtime.atom_array.items.len, 2);
+        testing.expectEqual(runtime.atom_hash.count(), 0);
     }
 }
 
