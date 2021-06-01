@@ -2,6 +2,97 @@ const std = @import("std");
 const unicode = @import("unicode.zig");
 const testing = std.testing;
 
+
+/// Compares the given arrays with different types to determine the lexigraphical sort order
+/// of the two values.
+fn order_memory(comptime lhs_t: type, comptime rhs_t: type, lhs: []const lhs_t, rhs: []const rhs_t) std.math.Order {
+    var i: usize = 0;
+    while (i < lhs.len and i < rhs.len) {
+        const left = lhs[i];
+        const right = rhs[i];
+        if (left < right) {
+            return std.math.Order.lt;
+        } else if (left > right) {
+            return std.math.Order.gt;
+        }
+        i += 1;
+    }
+
+    if (lhs.len == rhs.len) {
+        return std.math.Order.eq;
+    } else if (lhs.len < rhs.len) {
+        return std.math.Order.lt;
+    } else {
+        return std.math.Order.gt;
+    }
+
+//     static int memcmp16_8(const uint16_t *src1, const uint8_t *src2, int len)
+// {
+//     int c, i;
+//     for(i = 0; i < len; i++) {
+//         c = src1[i] - src2[i];
+//         if (c != 0)
+//             return c;
+//     }
+//     return 0;
+// }
+}
+
+test "order_memory()" {
+    {
+        // empty array
+        try testing.expectEqual(std.math.Order.eq, order_memory(u8, u16, &.{}, &.{}));
+        try testing.expectEqual(std.math.Order.eq, order_memory(u16, u8, &.{}, &.{}));
+
+        // single items
+        try testing.expectEqual(std.math.Order.eq, order_memory(u8, u16, &.{123,}, &.{123,}));
+        try testing.expectEqual(std.math.Order.eq, order_memory(u8, u16, &.{0}, &.{0}));
+        try testing.expectEqual(std.math.Order.eq, order_memory(u8, u16, &.{255}, &.{255}));
+        try testing.expectEqual(std.math.Order.lt, order_memory(u8, u16, &.{255}, &.{1024}));
+        try testing.expectEqual(std.math.Order.lt, order_memory(u8, u16, &.{0}, &.{1024}));
+        try testing.expectEqual(std.math.Order.lt, order_memory(u8, u16, &.{0}, &.{1}));
+        try testing.expectEqual(std.math.Order.gt, order_memory(u8, u16, &.{1}, &.{0}));
+        try testing.expectEqual(std.math.Order.gt, order_memory(u8, u16, &.{255}, &.{254}));
+
+        // single items - reversed types
+        try testing.expectEqual(std.math.Order.eq, order_memory(u16, u8, &.{123}, &.{123}));
+        try testing.expectEqual(std.math.Order.eq, order_memory(u16, u8, &.{0}, &.{0}));
+        try testing.expectEqual(std.math.Order.eq, order_memory(u16, u8, &.{255}, &.{255}));
+        try testing.expectEqual(std.math.Order.lt, order_memory(u16, u8, &.{0}, &.{1}));
+        try testing.expectEqual(std.math.Order.lt, order_memory(u16, u8, &.{254}, &.{255}));
+        try testing.expectEqual(std.math.Order.gt, order_memory(u16, u8, &.{1024}, &.{255}));
+        try testing.expectEqual(std.math.Order.gt, order_memory(u16, u8, &.{1024}, &.{0}));
+        try testing.expectEqual(std.math.Order.gt, order_memory(u16, u8, &.{1}, &.{0}));
+        
+        // multiple items
+        try testing.expectEqual(std.math.Order.eq, order_memory(u8, u16, &.{123, 255}, &.{123, 255}));
+        try testing.expectEqual(std.math.Order.eq, order_memory(u8, u16, &.{0, 1}, &.{0, 1}));
+        try testing.expectEqual(std.math.Order.eq, order_memory(u8, u16, &.{255, 0}, &.{255, 0}));
+        try testing.expectEqual(std.math.Order.lt, order_memory(u8, u16, &.{255, 123}, &.{255, 1024}));
+        try testing.expectEqual(std.math.Order.lt, order_memory(u8, u16, &.{0, 255}, &.{0, 1024}));
+        try testing.expectEqual(std.math.Order.lt, order_memory(u8, u16, &.{0, 0}, &.{0, 1}));
+        try testing.expectEqual(std.math.Order.gt, order_memory(u8, u16, &.{0, 1}, &.{0, 0}));
+        try testing.expectEqual(std.math.Order.gt, order_memory(u8, u16, &.{142, 255}, &.{142, 254}));
+
+        // multiple items - reversed types
+        try testing.expectEqual(std.math.Order.eq, order_memory(u16, u8, &.{123, 255}, &.{123, 255}));
+        try testing.expectEqual(std.math.Order.eq, order_memory(u16, u8, &.{0, 0}, &.{0, 0}));
+        try testing.expectEqual(std.math.Order.eq, order_memory(u16, u8, &.{255, 255}, &.{255, 255}));
+        try testing.expectEqual(std.math.Order.lt, order_memory(u16, u8, &.{0, 0}, &.{0, 1}));
+        try testing.expectEqual(std.math.Order.lt, order_memory(u16, u8, &.{123, 254}, &.{123, 255}));
+        try testing.expectEqual(std.math.Order.gt, order_memory(u16, u8, &.{0, 1024}, &.{0, 255}));
+        try testing.expectEqual(std.math.Order.gt, order_memory(u16, u8, &.{0, 1024}, &.{0, 0}));
+        try testing.expectEqual(std.math.Order.gt, order_memory(u16, u8, &.{0, 1}, &.{0, 0}));
+        
+        // length
+        try testing.expectEqual(std.math.Order.lt, order_memory(u8, u16, &.{0, 0}, &.{0, 0, 0}));
+        try testing.expectEqual(std.math.Order.gt, order_memory(u8, u16, &.{0, 0, 0}, &.{0, 0}));
+
+        try testing.expectEqual(std.math.Order.lt, order_memory(u16, u8, &.{0, 0}, &.{0, 0, 0}));
+        try testing.expectEqual(std.math.Order.gt, order_memory(u16, u8, &.{0, 0, 0}, &.{0, 0}));
+    }
+}
+
 const JSClassEnum = enum(u16) {
     // /* classid tag        */    /* union usage   | properties */
     ///  must be first
@@ -135,6 +226,18 @@ const JSTag = enum(i6) {
     // /* any larger tag is FLOAT64 if JS_NAN_BOXING */
 };
 
+const JSStrictEqualityModeEnum = enum {
+    JS_EQ_STRICT,
+    JS_EQ_SAME_VALUE,
+    JS_EQ_SAME_VALUE_ZERO
+};
+
+// typedef enum JSStrictEqModeEnum {
+//     JS_EQ_STRICT,
+//     JS_EQ_SAME_VALUE,
+//     JS_EQ_SAME_VALUE_ZERO,
+// } JSStrictEqModeEnum;
+
 const JSValue = union(JSTag) {
     JS_TAG_SYMBOL: *JSAtomData,
     JS_TAG_MODULE: *JSModuleDef,
@@ -191,8 +294,8 @@ const JSValue = union(JSTag) {
 
     /// Gets the JSGCObjectHeaderNode for the object that is referenced by the given value.
     /// Returns null if the value has no GC header.
-    pub fn get_gc_header(self: *Self) ?*JSGCObjectHeader {
-        return switch(value) {
+    pub fn get_gc_header(self: *const Self) ?*JSGCObjectHeaderNode {
+        return switch(self.*) {
             .JS_TAG_FUNCTION_BYTECODE => |bytecode| &bytecode.header,
             .JS_TAG_OBJECT => |obj| &obj.header,
 
@@ -202,6 +305,195 @@ const JSValue = union(JSTag) {
 
             else => null
         };
+    }
+
+    pub fn areEqual(first: JSValue, second: JSValue, mode: JSStrictEqualityModeEnum) bool {
+        // TODO: Finish porting
+        switch(first) {
+            .JS_TAG_BOOL => |b1| {
+                switch(second) {
+                    .JS_TAG_BOOL => |b2| {
+                        return b1 == b2;
+                    },
+                    else => {
+                        return false;
+                    }
+                }
+            },
+            .JS_TAG_NULL, .JS_TAG_UNDEFINED => {
+                return first == second;
+            },
+            .JS_TAG_STRING => |str1| {
+                switch(second) {
+                    .JS_TAG_STRING => |str2| {
+                        return JSString.compare(str1, str2) == 0;
+                    },
+                    else => {
+                        return false;
+                    }
+                }
+            }
+
+        }
+
+        // /* XXX: Should take JSValueConst arguments */
+// static BOOL js_strict_eq2(JSContext *ctx, JSValue op1, JSValue op2,
+//                           JSStrictEqModeEnum eq_mode)
+// {
+//     BOOL res;
+//     int tag1, tag2;
+//     double d1, d2;
+
+//     tag1 = JS_VALUE_GET_NORM_TAG(op1);
+//     tag2 = JS_VALUE_GET_NORM_TAG(op2);
+//     switch(tag1) {
+//     case JS_TAG_BOOL:
+//         if (tag1 != tag2) {
+//             res = FALSE;
+//         } else {
+//             res = JS_VALUE_GET_INT(op1) == JS_VALUE_GET_INT(op2);
+//             goto done_no_free;
+//         }
+//         break;
+//     case JS_TAG_NULL:
+//     case JS_TAG_UNDEFINED:
+//         res = (tag1 == tag2);
+//         break;
+//     case JS_TAG_STRING:
+//         {
+//             JSString *p1, *p2;
+//             if (tag1 != tag2) {
+//                 res = FALSE;
+//             } else {
+//                 p1 = JS_VALUE_GET_STRING(op1);
+//                 p2 = JS_VALUE_GET_STRING(op2);
+//                 res = (js_string_compare(ctx, p1, p2) == 0);
+//             }
+//         }
+//         break;
+//     case JS_TAG_SYMBOL:
+//         {
+//             JSAtomStruct *p1, *p2;
+//             if (tag1 != tag2) {
+//                 res = FALSE;
+//             } else {
+//                 p1 = JS_VALUE_GET_PTR(op1);
+//                 p2 = JS_VALUE_GET_PTR(op2);
+//                 res = (p1 == p2);
+//             }
+//         }
+//         break;
+//     case JS_TAG_OBJECT:
+//         if (tag1 != tag2)
+//             res = FALSE;
+//         else
+//             res = JS_VALUE_GET_OBJ(op1) == JS_VALUE_GET_OBJ(op2);
+//         break;
+//     case JS_TAG_INT:
+//         d1 = JS_VALUE_GET_INT(op1);
+//         if (tag2 == JS_TAG_INT) {
+//             d2 = JS_VALUE_GET_INT(op2);
+//             goto number_test;
+//         } else if (tag2 == JS_TAG_FLOAT64) {
+//             d2 = JS_VALUE_GET_FLOAT64(op2);
+//             goto number_test;
+//         } else {
+//             res = FALSE;
+//         }
+//         break;
+//     case JS_TAG_FLOAT64:
+//         d1 = JS_VALUE_GET_FLOAT64(op1);
+//         if (tag2 == JS_TAG_FLOAT64) {
+//             d2 = JS_VALUE_GET_FLOAT64(op2);
+//         } else if (tag2 == JS_TAG_INT) {
+//             d2 = JS_VALUE_GET_INT(op2);
+//         } else {
+//             res = FALSE;
+//             break;
+//         }
+//     number_test:
+//         if (unlikely(eq_mode >= JS_EQ_SAME_VALUE)) {
+//             JSFloat64Union u1, u2;
+//             /* NaN is not always normalized, so this test is necessary */
+//             if (isnan(d1) || isnan(d2)) {
+//                 res = isnan(d1) == isnan(d2);
+//             } else if (eq_mode == JS_EQ_SAME_VALUE_ZERO) {
+//                 res = (d1 == d2); /* +0 == -0 */
+//             } else {
+//                 u1.d = d1;
+//                 u2.d = d2;
+//                 res = (u1.u64 == u2.u64); /* +0 != -0 */
+//             }
+//         } else {
+//             res = (d1 == d2); /* if NaN return false and +0 == -0 */
+//         }
+//         goto done_no_free;
+// #ifdef CONFIG_BIGNUM
+//     case JS_TAG_BIG_INT:
+//         {
+//             bf_t a_s, *a, b_s, *b;
+//             if (tag1 != tag2) {
+//                 res = FALSE;
+//                 break;
+//             }
+//             a = JS_ToBigFloat(ctx, &a_s, op1);
+//             b = JS_ToBigFloat(ctx, &b_s, op2);
+//             res = bf_cmp_eq(a, b);
+//             if (a == &a_s)
+//                 bf_delete(a);
+//             if (b == &b_s)
+//                 bf_delete(b);
+//         }
+//         break;
+//     case JS_TAG_BIG_FLOAT:
+//         {
+//             JSBigFloat *p1, *p2;
+//             const bf_t *a, *b;
+//             if (tag1 != tag2) {
+//                 res = FALSE;
+//                 break;
+//             }
+//             p1 = JS_VALUE_GET_PTR(op1);
+//             p2 = JS_VALUE_GET_PTR(op2);
+//             a = &p1->num;
+//             b = &p2->num;
+//             if (unlikely(eq_mode >= JS_EQ_SAME_VALUE)) {
+//                 if (eq_mode == JS_EQ_SAME_VALUE_ZERO &&
+//                            a->expn == BF_EXP_ZERO && b->expn == BF_EXP_ZERO) {
+//                     res = TRUE;
+//                 } else {
+//                     res = (bf_cmp_full(a, b) == 0);
+//                 }
+//             } else {
+//                 res = bf_cmp_eq(a, b);
+//             }
+//         }
+//         break;
+//     case JS_TAG_BIG_DECIMAL:
+//         {
+//             JSBigDecimal *p1, *p2;
+//             const bfdec_t *a, *b;
+//             if (tag1 != tag2) {
+//                 res = FALSE;
+//                 break;
+//             }
+//             p1 = JS_VALUE_GET_PTR(op1);
+//             p2 = JS_VALUE_GET_PTR(op2);
+//             a = &p1->num;
+//             b = &p2->num;
+//             res = bfdec_cmp_eq(a, b);
+//         }
+//         break;
+// #endif
+//     default:
+//         res = FALSE;
+//         break;
+//     }
+//     JS_FreeValue(ctx, op1);
+//     JS_FreeValue(ctx, op2);
+//  done_no_free:
+//     return res;
+// }
     }
 };
 
@@ -263,6 +555,8 @@ const JSAtomData = struct {
     // hash_next: u30,
     val: JSAtomString,
     atom_type: AtomType,
+
+    hash: JSAtomHash,
 
     const Self = @This();
 
@@ -334,11 +628,69 @@ const JSAtomData = struct {
         return self.atom_type == .JS_ATOM_TYPE_STRING or
             self.atom_type == .JS_ATOM_TYPE_GLOBAL_SYMBOL;
     }
+
+    /// Performs a string comparision between the two given values.
+    /// Returns -1 if first should be sorted before second, 0 if they are equal,
+    /// and 1 if second should be sorted before first.
+    pub fn compare(first: *JSAtomData, second: *JSAtomData) std.math.Order {
+        switch(first.val) {
+            ._8_BIT => |str1| {
+                switch(second.val) {
+                    ._8_BIT => |str2| {
+                        return std.mem.order(u8, str1, str2);
+                    },
+                    ._16_BIT => |str2| {
+                        return order_memory(u8, u16, str1, str2.items);
+                    }
+                }
+            },
+            ._16_BIT => |str1| {
+                switch(second.val) {
+                    ._8_BIT => |str2| {
+                        return order_memory(u16, u8, str1.items, str2);
+                    },
+                    ._16_BIT => |str2| {
+                        return std.mem.order(u16, str1.items, str2.items);
+                    }
+                }
+            }
+        }
+    }
+//     /* return < 0, 0 or > 0 */
+// static int js_string_compare(JSContext *ctx,
+//                              const JSString *p1, const JSString *p2)
+// {
+//     int res, len;
+//     len = min_int(p1->len, p2->len);
+//     res = js_string_memcmp(p1, p2, len);
+//     if (res == 0) {
+//         if (p1->len == p2->len)
+//             res = 0;
+//         else if (p1->len < p2->len)
+//             res = -1;
+//         else
+//             res = 1;
+//     }
+//     return res;
+// }
+
+// js_string_memcp()
+// if (likely(!p1->is_wide_char)) {
+//         if (likely(!p2->is_wide_char))
+//             res = memcmp(p1->u.str8, p2->u.str8, len);
+//         else
+//             res = -memcmp16_8(p2->u.str16, p1->u.str8, len);
+//     } else {
+//         if (!p2->is_wide_char)
+//             res = memcmp16_8(p1->u.str16, p2->u.str8, len);
+//         else
+//             res = memcmp16(p1->u.str16, p2->u.str16, len);
+//     }
 };
 
 const JSString = JSAtomData;
 
-test "JSString.initFromBuffer()" {
+test "JSAtomData.initFromBuffer()" {
     {
         var gpa = JSAllocator{};
         defer std.testing.expect(!gpa.deinit()) catch unreachable;
@@ -346,7 +698,7 @@ test "JSString.initFromBuffer()" {
         var runtime = try JSRuntime.init(&gpa);
         defer runtime.deinit();
 
-        var string = try JSString.initFromBuffer(&runtime, "abcdef", .JS_ATOM_TYPE_STRING);
+        var string = try JSAtomData.initFromBuffer(&runtime, "abcdef", .JS_ATOM_TYPE_STRING);
         defer runtime.allocator.allocator.destroy(string);
         defer string.deinit(&runtime);
 
@@ -367,7 +719,7 @@ test "JSString.initFromBuffer()" {
         var runtime = try JSRuntime.init(&gpa);
         defer runtime.deinit();
 
-        var string = try JSString.initFromBuffer(&runtime, "😀", .JS_ATOM_TYPE_SYMBOL);
+        var string = try JSAtomData.initFromBuffer(&runtime, "😀", .JS_ATOM_TYPE_SYMBOL);
         defer runtime.allocator.allocator.destroy(string);
         defer string.deinit(&runtime);
 
@@ -383,7 +735,7 @@ test "JSString.initFromBuffer()" {
     }
 }
 
-test "JSString.initFromASCII()" {
+test "JSAtomData.initFromASCII()" {
     {
         var gpa = JSAllocator{};
         defer std.testing.expect(!gpa.deinit()) catch unreachable;
@@ -391,7 +743,7 @@ test "JSString.initFromASCII()" {
         var runtime = try JSRuntime.init(&gpa);
         defer runtime.deinit();
 
-        var string = try JSString.initFromASCII(&runtime, "abcdef", .JS_ATOM_TYPE_STRING);
+        var string = try JSAtomData.initFromASCII(&runtime, "abcdef", .JS_ATOM_TYPE_STRING);
         defer runtime.allocator.allocator.destroy(string);
         defer string.deinit(&runtime);
 
@@ -407,7 +759,7 @@ test "JSString.initFromASCII()" {
     }
 }
 
-test "JSString.initFromUtf8()" {
+test "JSAtomData.initFromUtf8()" {
     {
         var gpa = JSAllocator{};
         defer std.testing.expect(!gpa.deinit()) catch unreachable;
@@ -415,7 +767,7 @@ test "JSString.initFromUtf8()" {
         var runtime = try JSRuntime.init(&gpa);
         defer runtime.deinit();
 
-        var string = try JSString.initFromUtf8(&runtime, "abcdef", .JS_ATOM_TYPE_STRING);
+        var string = try JSAtomData.initFromUtf8(&runtime, "abcdef", .JS_ATOM_TYPE_STRING);
         defer runtime.allocator.allocator.destroy(string);
         defer string.deinit(&runtime);
 
@@ -428,6 +780,52 @@ test "JSString.initFromUtf8()" {
             },
             else => unreachable
         }
+    }
+}
+
+test "JSAtomData.compare()" {
+    { // UTF-8 + UTF-8
+        var gpa = JSAllocator{};
+        defer std.testing.expect(!gpa.deinit()) catch unreachable;
+
+        var runtime = try JSRuntime.init(&gpa);
+        defer runtime.deinit();
+
+        var a1 = try JSAtomData.initFromASCII(&runtime, "abcdef", .JS_ATOM_TYPE_STRING);
+        defer runtime.destroy_atom_data(a1);
+
+        var a2 = try JSAtomData.initFromASCII(&runtime, "abcdef", .JS_ATOM_TYPE_STRING);
+        defer runtime.destroy_atom_data(a2);
+
+        var b1 = try JSAtomData.initFromASCII(&runtime, "ghijfk", .JS_ATOM_TYPE_STRING);
+        defer runtime.destroy_atom_data(b1);
+
+        var c1 = try JSAtomData.initFromUtf8(&runtime, "abcdef", .JS_ATOM_TYPE_STRING);
+        defer runtime.destroy_atom_data(c1);
+
+        var c2 = try JSAtomData.initFromUtf8(&runtime, "abcdef", .JS_ATOM_TYPE_STRING);
+        defer runtime.destroy_atom_data(c2);
+
+        var d1 = try JSAtomData.initFromUtf8(&runtime, "ghijfk", .JS_ATOM_TYPE_STRING);
+        defer runtime.destroy_atom_data(d1);
+
+        // ASCII
+        try testing.expectEqual(std.math.Order.eq, JSAtomData.compare(a1, a2));
+        try testing.expectEqual(std.math.Order.lt, JSAtomData.compare(a1, b1));
+        try testing.expectEqual(std.math.Order.gt, JSAtomData.compare(b1, a1));
+
+        // UTF-8
+        try testing.expectEqual(std.math.Order.eq, JSAtomData.compare(c1, c2));
+        try testing.expectEqual(std.math.Order.lt, JSAtomData.compare(c1, d1));
+        try testing.expectEqual(std.math.Order.gt, JSAtomData.compare(d1, c1));
+
+        // ASCII + UTF-8
+        try testing.expectEqual(std.math.Order.eq, JSAtomData.compare(a1, c1));
+        try testing.expectEqual(std.math.Order.eq, JSAtomData.compare(c1, a1));
+        try testing.expectEqual(std.math.Order.lt, JSAtomData.compare(a1, d1));
+        try testing.expectEqual(std.math.Order.gt, JSAtomData.compare(d1, a1));
+        try testing.expectEqual(std.math.Order.lt, JSAtomData.compare(c1, b1));
+        try testing.expectEqual(std.math.Order.gt, JSAtomData.compare(b1, c1));
     }
 }
 
@@ -852,7 +1250,9 @@ const JSModuleDef = struct {
     eval_exception: JSValue,
 
     /// For import.meta
-    meta_obj: JSValue
+    meta_obj: JSValue,
+
+    const Self = @This();
 
     // JSRefCountHeader header; /* must come first, 32-bit */
     // JSAtomRef module_name;
@@ -887,6 +1287,14 @@ const JSModuleDef = struct {
     // BOOL eval_has_exception : 8; 
     // JSValue eval_exception;
     // JSValue meta_obj; /* for import.meta */
+
+    /// Frees resources owned by this module.
+    pub fn deinit(self: *Self) void {
+        self.req_module_entries.deinit();
+        self.export_entries.deinit();
+        self.import_entries.deinit();
+        self.star_export_entries.deinit();
+    }
 };
 
 // const JSValue = struct {
@@ -950,6 +1358,8 @@ const JSVarRef = struct {
     var_idx: u16,
     pvalue: *JSValue,
     value: JSValue,
+
+    const Self = @This();
 };
 
 // typedef struct JSVarRef {
@@ -2787,7 +3197,7 @@ const JSFunctionBytecode = struct {
     func_name: JSAtomRef,
 
     /// arguments + local variables (arg_count + var_count)
-    vardefs: []JSVarDef,
+    vardefs: ?[]JSVarDef,
     /// list of variables in the closure
     closure_var: []JSClosureVar,
 
@@ -2800,7 +3210,7 @@ const JSFunctionBytecode = struct {
     stack_size: u16,
 
     /// function realm
-    realm: *JSContext,
+    realm: ?*JSContext,
 
     // constant pool
     cpool: []JSValue,
@@ -3584,6 +3994,14 @@ test "JSShape.clone()" {
     }
 }
 
+const JSFreeModuleEnum = enum {
+    JS_FREE_MODULE_ALL,
+    JS_FREE_MODULE_NOT_RESOLVED,
+    JS_FREE_MODULE_NOT_EVALUATED,
+};
+// typedef enum JSFreeModuleEnum {
+// } JSFreeModuleEnum;
+
 const JSContext = struct {
     header: JSGCObjectHeaderNode,
     runtime: *JSRuntime,
@@ -3700,6 +4118,7 @@ const JSContext = struct {
 
     pub fn deinit(self: *Self) void {
         self.class_proto.deinit();
+        self.destroy_modules(.JS_FREE_MODULE_ALL);
     }
 
     pub fn duplicate(self: *Self) *Self {
@@ -3926,6 +4345,115 @@ const JSContext = struct {
                 } else {
                     // new prop uses a value
                     // TODO: finish porting
+
+                    if (prop_shape.flags & JS_PROP_TMASK == JS_PROP_GETSET) {
+                        // convert to data descriptor
+                        var prepared = try obj.prepare_shape_property_update(self, prop_shape);
+                        prop_shape = p.property_shape;
+
+                        if (prop.getset.getter) |getter| {
+                            self.runtime.release_value(JSValue{ .JS_TAG_OBJECT = getter });
+                        }
+
+                        if (prop.getset.setter) |setter| {
+                            self.runtime.release_value(JSValue{ .JS_TAG_OBJECT = setter });
+                        }
+
+                        prop_shape.flags = prop_shape.flags & (~JS_PROP_TMASK | JS_PROP_WRITABLE);
+                        prop.value = JS_UNDEFINED;
+    //                     if (js_shape_prepare_update(ctx, p, &prs))
+    //                         return -1;
+    //                     if (pr->u.getset.getter)
+    //                         JS_FreeValue(ctx, JS_MKPTR(JS_TAG_OBJECT, pr->u.getset.getter));
+    //                     if (pr->u.getset.setter)
+    //                         JS_FreeValue(ctx, JS_MKPTR(JS_TAG_OBJECT, pr->u.getset.setter));
+    //                     prs->flags &= ~(JS_PROP_TMASK | JS_PROP_WRITABLE);
+    //                     pr->u.value = JS_UNDEFINED;
+                    } else if(prop_shape.flags & JS_PROP_TMASK == JS_PROP_VARREF) {
+                        // Note: JS_PROP_VARREF is always writable
+                    } 
+                    // TODO: Finish
+                    // else if(prop_shape.flags & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE) == 0 and flags & JS_PROP_HAS_VALUE != 0 and ) {
+
+                    // }
+
+
+                    // if ((prs->flags & JS_PROP_TMASK) == JS_PROP_GETSET) {
+    //                     /* convert to data descriptor */
+    
+    //                 } else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_VARREF) {
+    //                     /* Note: JS_PROP_VARREF is always writable */
+    //                 } else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_AUTOINIT) {
+    //                     /* clear property and update */
+    //                     if (js_shape_prepare_update(ctx, p, &prs))
+    //                         return -1;
+    //                     js_autoinit_free(ctx->rt, pr);
+    //                     prs->flags &= ~JS_PROP_TMASK;
+    //                     pr->u.value = JS_UNDEFINED;
+    //                 } else {
+    //                     if ((prs->flags & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE)) == 0 &&
+    //                         (flags & JS_PROP_HAS_VALUE) &&
+    //                         !js_same_value(ctx, val, pr->u.value)) {
+    //                         goto not_configurable;
+    //                     }
+    //                 }
+    //                 if (prs->flags & JS_PROP_LENGTH) {
+    //                     if (flags & JS_PROP_HAS_VALUE) {
+    //                         res = set_array_length(ctx, p, pr, JS_DupValue(ctx, val),
+    //                                             flags);
+    //                     } else {
+    //                         res = TRUE;
+    //                     }
+    //                     /* still need to reset the writable flag if needed.
+    //                     The JS_PROP_LENGTH is reset to have the correct
+    //                     read-only behavior in JS_SetProperty(). */
+    //                     if ((flags & (JS_PROP_HAS_WRITABLE | JS_PROP_WRITABLE)) ==
+    //                         JS_PROP_HAS_WRITABLE) {
+    //                         prs = get_shape_prop(p->shape);
+    //                         if (js_update_property_flags(ctx, p, &prs,
+    //                                                     prs->flags & ~(JS_PROP_WRITABLE | JS_PROP_LENGTH)))
+    //                             return -1;
+    //                     }
+    //                     return res;
+    //                 } else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_VARREF) {
+    //                     if (flags & JS_PROP_HAS_VALUE) {
+    //                         if (p->class_id == JS_CLASS_MODULE_NS) {
+    //                             /* JS_PROP_WRITABLE is always true for variable
+    //                             references, but they are write protected in module name
+    //                             spaces. */
+    //                             if (!js_same_value(ctx, val, *pr->u.var_ref->pvalue))
+    //                                 goto not_configurable;
+    //                         }
+    //                         /* update the reference */
+    //                         set_value(ctx, pr->u.var_ref->pvalue,
+    //                                 JS_DupValue(ctx, val));
+    //                     }
+    //                     /* if writable is set to false, no longer a
+    //                     reference (for mapped arguments) */
+    //                     if ((flags & (JS_PROP_HAS_WRITABLE | JS_PROP_WRITABLE)) == JS_PROP_HAS_WRITABLE) {
+    //                         JSValue val1;
+    //                         if (js_shape_prepare_update(ctx, p, &prs))
+    //                             return -1;
+    //                         val1 = JS_DupValue(ctx, *pr->u.var_ref->pvalue);
+    //                         free_var_ref(ctx->rt, pr->u.var_ref);
+    //                         pr->u.value = val1;
+    //                         prs->flags &= ~(JS_PROP_TMASK | JS_PROP_WRITABLE);
+    //                     }
+    //                 } else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_AUTOINIT) {
+    //                     /* XXX: should never happen, type was reset above */
+    //                     abort();
+    //                 } else {
+    //                     if (flags & JS_PROP_HAS_VALUE) {
+    //                         JS_FreeValue(ctx, pr->u.value);
+    //                         pr->u.value = JS_DupValue(ctx, val);
+    //                     }
+    //                     if (flags & JS_PROP_HAS_WRITABLE) {
+    //                         if (js_update_property_flags(ctx, p, &prs,
+    //                                                     (prs->flags & ~JS_PROP_WRITABLE) |
+    //                                                     (flags & JS_PROP_WRITABLE)))
+    //                             return -1;
+    //                     }
+    //                 }
                 }
             }
         }
@@ -4232,6 +4760,96 @@ const JSContext = struct {
         return JSValue{
             .JS_TAG_OBJECT = obj
         };
+    }
+
+    /// Destroys all the loaded modules owned by this context.
+    fn destroy_modules(self: *Self, flag: JSFreeModuleEnum) void {
+        var item = self.loaded_modules.first;
+        while(item) |def| {
+            item = def.next;
+            if (flag == .JS_FREE_MODULE_ALL or
+                (flag == .JS_FREE_MODULE_NOT_RESOLVED and !def.data.resolved) or
+                (flag == .JS_FREE_MODULE_NOT_EVALUATED and !def.data.evaluated)) {
+                 self.destroy_module(def);
+             }
+        }
+        // struct list_head *el, *el1;
+        // list_for_each_safe(el, el1, &ctx->loaded_modules) {
+        //     JSModuleDef *m = list_entry(el, JSModuleDef, link);
+        //     if (flag == JS_FREE_MODULE_ALL ||
+        //         (flag == JS_FREE_MODULE_NOT_RESOLVED && !m->resolved) ||
+        //         (flag == JS_FREE_MODULE_NOT_EVALUATED && !m->evaluated)) {
+        //         js_free_module_def(ctx, m);
+        //     }
+        // }
+    }
+
+    fn destroy_module(self: *Self, module_node: *std.TailQueue(JSModuleDef).Node) void {
+        var module = &module_node.data;
+
+        self.runtime.release_atom_ref(module.module_name);
+        
+        for (module.req_module_entries.items) |*entry| {
+            self.runtime.release_atom_ref(entry.module_name);
+        }
+
+        for (module.export_entries.items) |*entry| {
+            switch(entry.value) {
+                .JS_EXPORT_TYPE_LOCAL => |local| {
+                    self.runtime.release_var_ref(local.var_ref);
+                },
+                else => {}
+            }
+            self.runtime.release_atom_ref(entry.export_name);
+            self.runtime.release_atom_ref(entry.local_name);
+        }
+
+        for (module.import_entries.items) |*entry| {
+            self.runtime.release_atom_ref(entry.import_name);
+        }
+
+        self.runtime.release_value(module.module_ns);
+        self.runtime.release_value(module.func_obj);
+        self.runtime.release_value(module.eval_exception);
+        self.runtime.release_value(module.meta_obj);
+
+        module.deinit();
+
+        self.loaded_modules.remove(module_node);
+
+        // int i;
+
+        // JS_FreeAtom(ctx, m->module_name);
+
+        // for(i = 0; i < m->req_module_entries_count; i++) {
+        //     JSReqModuleEntry *rme = &m->req_module_entries[i];
+        //     JS_FreeAtom(ctx, rme->module_name);
+        // }
+        // js_free(ctx, m->req_module_entries);
+
+        // for(i = 0; i < m->export_entries_count; i++) {
+        //     JSExportEntry *me = &m->export_entries[i];
+        //     if (me->export_type == JS_EXPORT_TYPE_LOCAL)
+        //         free_var_ref(ctx->rt, me->u.local.var_ref);
+        //     JS_FreeAtom(ctx, me->export_name);
+        //     JS_FreeAtom(ctx, me->local_name);
+        // }
+        // js_free(ctx, m->export_entries);
+
+        // js_free(ctx, m->star_export_entries);
+
+        // for(i = 0; i < m->import_entries_count; i++) {
+        //     JSImportEntry *mi = &m->import_entries[i];
+        //     JS_FreeAtom(ctx, mi->import_name);
+        // }
+        // js_free(ctx, m->import_entries);
+
+        // JS_FreeValue(ctx, m->module_ns);
+        // JS_FreeValue(ctx, m->func_obj);
+        // JS_FreeValue(ctx, m->eval_exception);
+        // JS_FreeValue(ctx, m->meta_obj);
+        // list_del(&m->link);
+        // js_free(ctx, m);
     }
 };
 
@@ -4605,6 +5223,14 @@ const JSRuntime = struct {
         return context_ptr;
     }
 
+    /// Releases the given reference to the given JSContext.
+    pub fn release_context(self: *Self, context: *JSContext) void {
+        context.header.data.remove_ref();
+        if (context.header.data.ref_count <= 0) {
+            self.destroy_context(context);
+        }
+    }
+
     /// Finds or creates a new atom reference from the given atom data.
     /// If the atom is hashable, then a search will be made for another atom that has the same hashcode.
     /// Otherwise, a new reference will be created for the given atom.
@@ -4613,6 +5239,7 @@ const JSRuntime = struct {
         const index: u32 = @intCast(u32, self.atom_array.items.len);
         if (data.hashable()) {
             const hash = hash_string(data, @as(u32, @enumToInt(data.atom_type)));
+            data.hash = hash;
 
             if (self.atom_hash.get(hash)) |ref| {
                 if (self.get_atom_data(ref)) |atom| {
@@ -5379,7 +6006,7 @@ const JSRuntime = struct {
                 self.destroy_object(obj);
             },
             .JS_GC_OBJ_TYPE_FUNCTION_BYTECODE => |bytecode| {
-                self.free_bytecode(bytecode);
+                self.destroy_bytecode(bytecode);
             },
             else => unreachable
         }
@@ -5509,8 +6136,8 @@ const JSRuntime = struct {
     /// This JSValue is invalid once release() is called.
     pub fn release_value(self: *Self, value: JSValue) void {
         if (value.get_gc_header()) |header| {
-            header.remove_ref();
-            if (header.ref_count <= 0) {
+            header.data.remove_ref();
+            if (header.data.ref_count <= 0) {
                 self.destroy_value(value);
             }
         }
@@ -5615,15 +6242,19 @@ const JSRuntime = struct {
 
     pub fn release_var_ref(self: *Self, var_ref: ?*JSVarRef) void {
 
-        if(var_ref) |ref| {
+        if (var_ref) |ref| {
             std.debug.assert(ref.header.data.ref_count > 0);
             ref.header.data.remove_ref();
             if (ref.header.data.ref_count == 0) {
                 if (ref.is_detached) {
-                    ref.value.release();
+                    self.release_value(ref.value);
+                    self.remove_gc_obj(&ref.header);
                 } else {
-
+                    // TODO: implement
+                    unreachable;
                 }
+
+                self.allocator.allocator.destroy(ref);
             }
         }
 
@@ -5647,6 +6278,25 @@ const JSRuntime = struct {
 
     fn destroy_bytecode(self: *Self, bytecode: *JSFunctionBytecode) void {
         self.destroy_bytecode_atoms(bytecode.byte_code_buf, true);
+
+        if (bytecode.vardefs) |vardefs| {
+            for(vardefs) |def| {
+                self.release_atom_ref(def.var_name);
+            }
+        }
+        
+        for (bytecode.cpool) |val| {
+            self.destroy_value(val);
+        }
+
+        for (bytecode.closure_var) |closure_var| {
+            self.release_atom_ref(closure_var.var_name);
+        }
+
+        if (bytecode.realm) |realm| {
+            self.release_context(realm);
+        }
+        
 
         // int i;
 
@@ -5768,7 +6418,7 @@ const JSRuntime = struct {
 
     fn destroy_atom_struct(self: *Self, atom: *JSAtomData) void {
         if (atom.atom_type != .JS_ATOM_TYPE_SYMBOL) {
-            self.atom_hash.remove(atom.hash);
+            _ = self.atom_hash.remove(atom.hash);
             self.allocator.allocator.destroy(atom);
         }
         // TODO: Finish implementation
@@ -5813,6 +6463,98 @@ const JSRuntime = struct {
     //     js_free_rt(rt, p);
     //     rt->atom_count--;
     //     assert(rt->atom_count >= 0);
+    }
+
+    fn destroy_context(self: *Self, context: *JSContext) void {
+        self.release_value(context.global_obj);
+        self.release_value(context.global_var_obj);
+        self.release_value(context.throw_type_error);
+        self.release_value(context.eval_obj);
+        self.release_value(context.array_proto_values);
+
+        for(context.native_error_proto) |proto| {
+            self.release_value(proto);
+        }
+
+        for (context.class_proto.items) |class| {
+            self.release_value(class);
+        }
+        self.release_value(context.iterator_proto);
+        self.release_value(context.async_iterator_proto);
+        self.release_value(context.promise_ctor);
+        self.release_value(context.array_ctor);
+        self.release_value(context.regexp_ctor);
+        self.release_value(context.function_ctor);
+        self.release_value(context.function_proto);
+        self.remove_gc_obj(&context.header);
+
+        for(self.context_list.items) |*c, i| {
+            if (context == c) {
+                _ = self.context_list.orderedRemove(i);
+                break;
+            }
+        }
+
+        context.deinit();
+
+        // #ifdef DUMP_ATOMS
+    //     JS_DumpAtoms(ctx->rt);
+    // #endif
+    // #ifdef DUMP_SHAPES
+    //     JS_DumpShapes(ctx->rt);
+    // #endif
+    // #ifdef DUMP_OBJECTS
+    //     {
+    //         struct list_head *el;
+    //         JSGCObjectHeader *p;
+    //         printf("JSObjects: {\n");
+    //         JS_DumpObjectHeader(ctx->rt);
+    //         list_for_each(el, &rt->gc_obj_list) {
+    //             p = list_entry(el, JSGCObjectHeader, link);
+    //             JS_DumpGCObject(rt, p);
+    //         }
+    //         printf("}\n");
+    //     }
+    // #endif
+    // #ifdef DUMP_MEM
+    //     {
+    //         JSMemoryUsage stats;
+    //         JS_ComputeMemoryUsage(rt, &stats);
+    //         JS_DumpMemoryUsage(stdout, &stats, rt);
+    //     }
+    // #endif
+
+    //     js_debugger_free_context(ctx);
+
+    //     js_free_modules(ctx, JS_FREE_MODULE_ALL);
+
+    //     JS_FreeValue(ctx, ctx->global_obj);
+    //     JS_FreeValue(ctx, ctx->global_var_obj);
+
+    //     JS_FreeValue(ctx, ctx->throw_type_error);
+    //     JS_FreeValue(ctx, ctx->eval_obj);
+
+    //     JS_FreeValue(ctx, ctx->array_proto_values);
+    //     for(i = 0; i < JS_NATIVE_ERROR_COUNT; i++) {
+    //         JS_FreeValue(ctx, ctx->native_error_proto[i]);
+    //     }
+    //     for(i = 0; i < rt->class_count; i++) {
+    //         JS_FreeValue(ctx, ctx->class_proto[i]);
+    //     }
+    //     js_free_rt(rt, ctx->class_proto);
+    //     JS_FreeValue(ctx, ctx->iterator_proto);
+    //     JS_FreeValue(ctx, ctx->async_iterator_proto);
+    //     JS_FreeValue(ctx, ctx->promise_ctor);
+    //     JS_FreeValue(ctx, ctx->array_ctor);
+    //     JS_FreeValue(ctx, ctx->regexp_ctor);
+    //     JS_FreeValue(ctx, ctx->function_ctor);
+    //     JS_FreeValue(ctx, ctx->function_proto);
+
+    //     js_free_shape_null(ctx->rt, ctx->array_shape);
+
+    //     list_del(&ctx->link);
+    //     remove_gc_object(&ctx->header);
+    //     js_free_rt(ctx->rt, ctx);
     }
 
     
