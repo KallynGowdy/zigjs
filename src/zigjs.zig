@@ -341,7 +341,7 @@ const JSString = JSAtomData;
 test "JSString.initFromBuffer()" {
     {
         var gpa = JSAllocator{};
-        defer std.testing.expect(!gpa.deinit());
+        defer std.testing.expect(!gpa.deinit()) catch unreachable;
 
         var runtime = try JSRuntime.init(&gpa);
         defer runtime.deinit();
@@ -350,19 +350,19 @@ test "JSString.initFromBuffer()" {
         defer runtime.allocator.allocator.destroy(string);
         defer string.deinit(&runtime);
 
-        testing.expect(string.atom_type == .JS_ATOM_TYPE_STRING);
-        testing.expect(string.val == ._8_BIT);
+        try testing.expect(string.atom_type == .JS_ATOM_TYPE_STRING);
+        try testing.expect(string.val == ._8_BIT);
         
         switch(string.val) {
             ._8_BIT => |val| {
-                testing.expectEqualStrings(val, "abcdef");
+                try testing.expectEqualStrings(val, "abcdef");
             },
             else => unreachable
         }
     }
     {
         var gpa = JSAllocator{};
-        defer std.testing.expect(!gpa.deinit());
+        defer std.testing.expect(!gpa.deinit()) catch unreachable;
 
         var runtime = try JSRuntime.init(&gpa);
         defer runtime.deinit();
@@ -371,12 +371,12 @@ test "JSString.initFromBuffer()" {
         defer runtime.allocator.allocator.destroy(string);
         defer string.deinit(&runtime);
 
-        testing.expect(string.atom_type == .JS_ATOM_TYPE_SYMBOL);
-        testing.expect(string.val == ._16_BIT);
+        try testing.expect(string.atom_type == .JS_ATOM_TYPE_SYMBOL);
+        try testing.expect(string.val == ._16_BIT);
         
         switch(string.val) {
             ._16_BIT => |val| {
-                testing.expectEqualSlices(u16, val.items, &std.unicode.utf8ToUtf16LeStringLiteral("😀").*);
+                try testing.expectEqualSlices(u16, val.items, &std.unicode.utf8ToUtf16LeStringLiteral("😀").*);
             },
             else => unreachable
         }
@@ -386,7 +386,7 @@ test "JSString.initFromBuffer()" {
 test "JSString.initFromASCII()" {
     {
         var gpa = JSAllocator{};
-        defer std.testing.expect(!gpa.deinit());
+        defer std.testing.expect(!gpa.deinit()) catch unreachable;
 
         var runtime = try JSRuntime.init(&gpa);
         defer runtime.deinit();
@@ -395,12 +395,12 @@ test "JSString.initFromASCII()" {
         defer runtime.allocator.allocator.destroy(string);
         defer string.deinit(&runtime);
 
-        testing.expect(string.atom_type == .JS_ATOM_TYPE_STRING);
-        testing.expect(string.val == ._8_BIT);
+        try testing.expect(string.atom_type == .JS_ATOM_TYPE_STRING);
+        try testing.expect(string.val == ._8_BIT);
         
         switch(string.val) {
             ._8_BIT => |val| {
-                testing.expectEqualStrings(val, "abcdef");
+                try testing.expectEqualStrings(val, "abcdef");
             },
             else => unreachable
         }
@@ -410,7 +410,7 @@ test "JSString.initFromASCII()" {
 test "JSString.initFromUtf8()" {
     {
         var gpa = JSAllocator{};
-        defer std.testing.expect(!gpa.deinit());
+        defer std.testing.expect(!gpa.deinit()) catch unreachable;
 
         var runtime = try JSRuntime.init(&gpa);
         defer runtime.deinit();
@@ -419,12 +419,12 @@ test "JSString.initFromUtf8()" {
         defer runtime.allocator.allocator.destroy(string);
         defer string.deinit(&runtime);
 
-        testing.expect(string.atom_type == .JS_ATOM_TYPE_STRING);
-        testing.expect(string.val == ._16_BIT);
+        try testing.expect(string.atom_type == .JS_ATOM_TYPE_STRING);
+        try testing.expect(string.val == ._16_BIT);
         
         switch(string.val) {
             ._16_BIT => |val| {
-                testing.expectEqualSlices(u16, val.items, &std.unicode.utf8ToUtf16LeStringLiteral("abcdef").*);
+                try testing.expectEqualSlices(u16, val.items, &std.unicode.utf8ToUtf16LeStringLiteral("abcdef").*);
             },
             else => unreachable
         }
@@ -1507,7 +1507,7 @@ fn hash_string(str: *JSString, h: u32) u32 {
 test "hash_string()" {
     {
         var gpa = JSAllocator{};
-        defer std.testing.expect(!gpa.deinit());
+        defer std.testing.expect(!gpa.deinit()) catch unreachable;
 
         var runtime = try JSRuntime.init(&gpa);
         defer runtime.deinit();
@@ -1516,11 +1516,11 @@ test "hash_string()" {
         defer runtime.allocator.allocator.destroy(string);
         defer string.deinit(&runtime);
 
-        testing.expectEqual(@as(u32, 102), hash_string(string, 0));
+        try testing.expectEqual(@as(u32, 102), hash_string(string, 0));
     }
     {
         var gpa = JSAllocator{};
-        defer std.testing.expect(!gpa.deinit());
+        defer std.testing.expect(!gpa.deinit()) catch unreachable;
 
         var runtime = try JSRuntime.init(&gpa);
         defer runtime.deinit();
@@ -1529,7 +1529,7 @@ test "hash_string()" {
         defer runtime.allocator.allocator.destroy(string);
         defer string.deinit(&runtime);
 
-        testing.expectEqual(@as(u32, 56832), hash_string(string, 0));
+        try testing.expectEqual(@as(u32, 56832), hash_string(string, 0));
     }
 }
 
@@ -1653,7 +1653,7 @@ const JSObject = struct {
                 var prop: *JSProperty = if (shape == context.array_shape) &self.properties.items[0] 
                     else try self.add_property(context, @enumToInt(JSAtomEnum.JS_ATOM_length), JS_PROP_WRITABLE | JS_PROP_LENGTH);
                 prop.* = .{
-                    .VALUE = JS_NewInt(0)
+                    .value = JS_NewInt(0)
                 };
             },
             else => {
@@ -1999,7 +1999,7 @@ const JSObject = struct {
 test "JSObject.newObject()" {
     { // new empty object
         var gpa = JSAllocator{};
-        defer std.testing.expect(!gpa.deinit());
+        defer std.testing.expect(!gpa.deinit()) catch unreachable;
 
         var runtime = try JSRuntime.init(&gpa);
         defer runtime.deinit();
@@ -2013,13 +2013,13 @@ test "JSObject.newObject()" {
 
         var gc = get_gc_object(&obj.header);
 
-        testing.expect(gc.JS_GC_OBJ_TYPE_JS_OBJECT == obj);
-        testing.expect(obj.shape == shape);
-        testing.expect(obj.properties.items.len == 0);
-        testing.expect(obj.class_id == @enumToInt(JSClassEnum.JS_CLASS_OBJECT));
-        testing.expect(obj.header.next == null);
-        testing.expect(obj.header.prev == &shape.header);
-        testing.expect(runtime.gc_obj_list.last.? == &obj.header);
+        try testing.expect(gc.JS_GC_OBJ_TYPE_JS_OBJECT == obj);
+        try testing.expect(obj.shape == shape);
+        try testing.expect(obj.properties.items.len == 0);
+        try testing.expect(obj.class_id == @enumToInt(JSClassEnum.JS_CLASS_OBJECT));
+        try testing.expect(obj.header.next == null);
+        try testing.expect(obj.header.prev == &shape.header);
+        try testing.expect(runtime.gc_obj_list.last.? == &obj.header);
     }
 }
 
@@ -2892,8 +2892,8 @@ const JSFunctionBytecode = struct {
 //     {
 //         // make int value
 //         const result = JS_MakeIntVal(.JS_TAG_INT, 32);
-//         testing.expect(result.tag == .JS_TAG_INT);
-//         testing.expect(result.u.int32 == 32);
+//         try testing.expect(result.tag == .JS_TAG_INT);
+//         try testing.expect(result.u.int32 == 32);
 //     }
 // }
 
@@ -2914,10 +2914,10 @@ fn JS_NewInt(val: i32) JSValue {
 
 test "JS_NewInt()" {
     const result = JS_NewInt(42);
-    testing.expect(@as(JSTag, result) == .JS_TAG_INT);
+    try testing.expect(@as(JSTag, result) == .JS_TAG_INT);
 
     switch(result) {
-        .JS_TAG_INT => |val| testing.expect(val == 42),
+        .JS_TAG_INT => |val| try testing.expect(val == 42),
         else => unreachable
     }
 }
@@ -2930,10 +2930,10 @@ fn JS_NewFloat(val: f64) JSValue {
 
 test "JS_NewFloat()" {
     const result = JS_NewFloat(42.32);
-    testing.expect(@as(JSTag, result) == .JS_TAG_FLOAT64);
+    try testing.expect(@as(JSTag, result) == .JS_TAG_FLOAT64);
 
     switch(result) {
-        .JS_TAG_FLOAT64 => |val| testing.expect(val == 42.32),
+        .JS_TAG_FLOAT64 => |val| try testing.expect(val == 42.32),
         else => unreachable
     }
 }
@@ -3029,10 +3029,10 @@ fn JS_NAN() JSValue {
 
 test "JS_NAN()" {
     const result = JS_NAN();
-    testing.expect(@as(JSTag, result) == .JS_TAG_FLOAT64);
+    try testing.expect(@as(JSTag, result) == .JS_TAG_FLOAT64);
 
     switch(result) {
-        .JS_TAG_FLOAT64 => |val| testing.expect(std.math.isNan(val)),
+        .JS_TAG_FLOAT64 => |val| try testing.expect(std.math.isNan(val)),
         else => unreachable
     }
 }
@@ -3043,10 +3043,10 @@ fn JS_VALUE_IS_BOTH_INT(v1: JSValue, v2: JSValue) bool {
 }
 
 test "JS_VALUE_IS_BOTH_INT()" {
-    testing.expect(JS_VALUE_IS_BOTH_INT(JS_NewInt(33), JS_NewInt(11)) == true);
-    testing.expect(JS_VALUE_IS_BOTH_INT(JS_NewInt(33), JS_NewFloat(3.2)) == false);
-    testing.expect(JS_VALUE_IS_BOTH_INT(JS_NewFloat(3.2), JS_NewInt(33)) == false);
-    testing.expect(JS_VALUE_IS_BOTH_INT(JS_NewFloat(3.2), JS_NewFloat(3.14)) == false);
+    try testing.expect(JS_VALUE_IS_BOTH_INT(JS_NewInt(33), JS_NewInt(11)) == true);
+    try testing.expect(JS_VALUE_IS_BOTH_INT(JS_NewInt(33), JS_NewFloat(3.2)) == false);
+    try testing.expect(JS_VALUE_IS_BOTH_INT(JS_NewFloat(3.2), JS_NewInt(33)) == false);
+    try testing.expect(JS_VALUE_IS_BOTH_INT(JS_NewFloat(3.2), JS_NewFloat(3.14)) == false);
 }
 
 fn JS_VALUE_IS_BOTH_FLOAT(v1: JSValue, v2: JSValue) bool {
@@ -3054,10 +3054,10 @@ fn JS_VALUE_IS_BOTH_FLOAT(v1: JSValue, v2: JSValue) bool {
 }
 
 test "JS_VALUE_IS_BOTH_FLOAT()" {
-    testing.expect(JS_VALUE_IS_BOTH_FLOAT(JS_NewFloat(3.2), JS_NewFloat(3.14)) == true);
-    testing.expect(JS_VALUE_IS_BOTH_FLOAT(JS_NewFloat(3.2), JS_NewInt(33)) == false);
-    testing.expect(JS_VALUE_IS_BOTH_FLOAT(JS_NewInt(33), JS_NewFloat(3.2)) == false);
-    testing.expect(JS_VALUE_IS_BOTH_FLOAT(JS_NewInt(33), JS_NewInt(11)) == false);
+    try testing.expect(JS_VALUE_IS_BOTH_FLOAT(JS_NewFloat(3.2), JS_NewFloat(3.14)) == true);
+    try testing.expect(JS_VALUE_IS_BOTH_FLOAT(JS_NewFloat(3.2), JS_NewInt(33)) == false);
+    try testing.expect(JS_VALUE_IS_BOTH_FLOAT(JS_NewInt(33), JS_NewFloat(3.2)) == false);
+    try testing.expect(JS_VALUE_IS_BOTH_FLOAT(JS_NewInt(33), JS_NewInt(11)) == false);
 }
 
 // #define JS_VALUE_HAS_REF_COUNT(v) ((unsigned)JS_VALUE_GET_TAG(v) >= (unsigned)JS_TAG_FIRST)
@@ -3504,7 +3504,7 @@ const JSShape = struct {
 test "JSShape.initFromProto()" {
     { // null prototype
         var gpa = JSAllocator{};
-        defer std.testing.expect(!gpa.deinit());
+        defer std.testing.expect(!gpa.deinit()) catch unreachable;
 
         var runtime = try JSRuntime.init(&gpa);
         defer runtime.deinit();
@@ -3515,21 +3515,21 @@ test "JSShape.initFromProto()" {
         var shape = try JSShape.initFromProto(context, null);
         try runtime.add_shape(shape);
 
-        testing.expect(shape.properties.capacity == 2);
-        testing.expect(shape.properties.items.len == 0);
-        testing.expect(shape.header.data.ref_count == 1);
-        testing.expect(shape.is_hashed == true);
-        testing.expect(shape.deleted_prop_count == 0);
-        testing.expect(shape.has_small_array_index == false);
-        testing.expect(shape.proto == null);
+        try testing.expect(shape.properties.capacity == 2);
+        try testing.expect(shape.properties.items.len == 0);
+        try testing.expect(shape.header.data.ref_count == 1);
+        try testing.expect(shape.is_hashed == true);
+        try testing.expect(shape.deleted_prop_count == 0);
+        try testing.expect(shape.has_small_array_index == false);
+        try testing.expect(shape.proto == null);
         
         var found = runtime.shape_hash.get(shape.hash);
-        testing.expect(found.? == shape);
+        try testing.expect(found.? == shape);
     }
 
     { // other prototype
         var gpa = JSAllocator{};
-        defer std.testing.expect(!gpa.deinit());
+        defer std.testing.expect(!gpa.deinit()) catch unreachable;
 
         var runtime = try JSRuntime.init(&gpa);
         defer runtime.deinit();
@@ -3542,23 +3542,23 @@ test "JSShape.initFromProto()" {
 
         var shape = try JSShape.newFromProto(context, proto);
 
-        testing.expect(shape.properties.capacity == 2);
-        testing.expect(shape.properties.items.len == 0);
-        testing.expect(shape.header.data.ref_count == 1);
-        testing.expect(shape.is_hashed == true);
-        testing.expect(shape.deleted_prop_count == 0);
-        testing.expect(shape.has_small_array_index == false);
-        testing.expect(shape.proto == proto);
+        try testing.expect(shape.properties.capacity == 2);
+        try testing.expect(shape.properties.items.len == 0);
+        try testing.expect(shape.header.data.ref_count == 1);
+        try testing.expect(shape.is_hashed == true);
+        try testing.expect(shape.deleted_prop_count == 0);
+        try testing.expect(shape.has_small_array_index == false);
+        try testing.expect(shape.proto == proto);
         
         var found = runtime.shape_hash.get(shape.hash);
-        testing.expect(found.? == shape);
+        try testing.expect(found.? == shape);
     }
 }
 
 test "JSShape.clone()" {
     { // null prototype
         var gpa = JSAllocator{};
-        defer std.testing.expect(!gpa.deinit());
+        defer std.testing.expect(!gpa.deinit()) catch unreachable;
 
         var runtime = try JSRuntime.init(&gpa);
         defer runtime.deinit();
@@ -3573,14 +3573,14 @@ test "JSShape.clone()" {
         defer gpa.allocator.destroy(clone);
         defer clone.deinit();
 
-        testing.expect(clone.header.data.ref_count == 1);
-        testing.expect(clone.is_hashed == false);
-        testing.expect(clone.deleted_prop_count == 0);
-        testing.expect(clone.has_small_array_index == false);
-        testing.expect(clone.proto == null);
+        try testing.expect(clone.header.data.ref_count == 1);
+        try testing.expect(clone.is_hashed == false);
+        try testing.expect(clone.deleted_prop_count == 0);
+        try testing.expect(clone.has_small_array_index == false);
+        try testing.expect(clone.proto == null);
         
         var found = runtime.shape_hash.get(nullShape.hash);
-        testing.expect(found.? == nullShape);
+        try testing.expect(found.? == nullShape);
     }
 }
 
@@ -4238,7 +4238,7 @@ const JSContext = struct {
 test "JSContext.new_object_from_shape()" {
     {
         var gpa = JSAllocator{};
-        defer std.testing.expect(!gpa.deinit());
+        defer std.testing.expect(!gpa.deinit()) catch unreachable;
 
         var runtime = try JSRuntime.init(&gpa);
         defer runtime.deinit();
@@ -4250,13 +4250,13 @@ test "JSContext.new_object_from_shape()" {
 
         var obj = try context.new_object_from_shape(shape, .JS_CLASS_OBJECT);
 
-        testing.expect(obj == .JS_TAG_OBJECT);
+        try testing.expect(obj == .JS_TAG_OBJECT);
         switch(obj) {
             .JS_TAG_OBJECT => |o| {
-                testing.expect(o.shape == shape);
-                testing.expect(o.properties.items.len == o.shape.properties.items.len);
-                testing.expect(o.class_id == @enumToInt(JSClassEnum.JS_CLASS_OBJECT));
-                testing.expect(runtime.gc_obj_list.len == 3);
+                try testing.expect(o.shape == shape);
+                try testing.expect(o.properties.items.len == o.shape.properties.items.len);
+                try testing.expect(o.class_id == @enumToInt(JSClassEnum.JS_CLASS_OBJECT));
+                try testing.expect(runtime.gc_obj_list.len == 3);
             },
             else => unreachable,
         }
@@ -4841,7 +4841,7 @@ const JSRuntime = struct {
             var gc_obj = get_gc_object(obj);
             switch(gc_obj) {
                 .JS_GC_OBJ_TYPE_JS_OBJECT => |object| self.destroy_object(object),
-                .JS_GC_OBJ_TYPE_FUNCTION_BYTECODE => |bytecode| self.free_bytecode(bytecode),
+                .JS_GC_OBJ_TYPE_FUNCTION_BYTECODE => |bytecode| self.destroy_bytecode(bytecode),
                 else => {
                     self.tmp_obj_list.remove(obj);
                     self.gc_zero_ref_count_list.append(obj);
@@ -4994,8 +4994,10 @@ const JSRuntime = struct {
                 for(shape.properties.items) |*propertyShape, i| {
                     var prop = &obj.properties.items[i];
                     if (propertyShape.atom != @enumToInt(JSAtomEnum.JS_ATOM_NULL)) {
-                        switch(prop.*) {
-                            .GETSET => |*getset| {
+                        const propType = propertyShape.flags & JS_PROP_TMASK;
+                        if (propType != 0) {
+                            if (propType == JS_PROP_GETSET) {
+                                var getset = prop.getset;
                                 if (getset.getter) |getter| {
                                     mark_func(self, &getter.header);
                                 }
@@ -5003,23 +5005,46 @@ const JSRuntime = struct {
                                     mark_func(self, &setter.header);
                                 }
                                 break;
-                            },
-                            .VAR_REF => |var_ref| {
+                            } else if (propType == JS_PROP_VARREF) {
+                                var var_ref = prop.var_ref;
                                 if (var_ref.is_detached) {
                                     // Note: the tag order does not matter
                                     // provided it is a GC object
                                     mark_func(self, &var_ref.header);
                                 }
-                                break;
-                            },
-                            .AUTO_INIT => |*autoinit| {
-                                self.autoinit_mark(autoinit, mark_func);
-                            },
-                            .VALUE => |value| {
-                                self.mark_value(value, mark_func);
-                            },
-                            // else => unreachable
+                            } else if (propType == JS_PROP_AUTOINIT) {
+                                self.autoinit_mark(&prop.auto_init, mark_func);
+                            }
+                        } else {
+                            self.mark_value(prop.value, mark_func);
                         }
+
+                        // switch(prop.*) {
+                        //     .GETSET => |*getset| {
+                        //         if (getset.getter) |getter| {
+                        //             mark_func(self, &getter.header);
+                        //         }
+                        //         if (getset.setter) |setter| {
+                        //             mark_func(self, &setter.header);
+                        //         }
+                        //         break;
+                        //     },
+                        //     .VAR_REF => |var_ref| {
+                        //         if (var_ref.is_detached) {
+                        //             // Note: the tag order does not matter
+                        //             // provided it is a GC object
+                        //             mark_func(self, &var_ref.header);
+                        //         }
+                        //         break;
+                        //     },
+                        //     .AUTO_INIT => |*autoinit| {
+                        //         self.autoinit_mark(autoinit, mark_func);
+                        //     },
+                        //     .VALUE => |value| {
+                        //         self.mark_value(value, mark_func);
+                        //     },
+                        //     // else => unreachable
+                        // }
                         // if (propertyShape.flags & JS_PROP_TMASK != 0) {
                         // } else {
                         //     self.mark_value(prop.value, mark_func);
@@ -5679,7 +5704,7 @@ const JSRuntime = struct {
                 .atom_u16,
                 .atom_label_u8,
                 .atom_label_u16 => {
-                    const atom: JSAtomRef = std.mem.readIntSlice(JSAtomRef, bytecode[pos+1..], std.builtin.endian);
+                    const atom: JSAtomRef = std.mem.readIntSlice(JSAtomRef, bytecode[pos+1..], std.builtin.target.cpu.arch.endian());
                     self.destroy_atom(atom);
                 },
                 else => {}
@@ -5715,31 +5740,31 @@ const JSRuntime = struct {
         // }
     }
 
-    fn destroy_atom(self: *Self, atom: JSAtomRef) void {
-        if (!JSAtomEnum.is_const(atom)) {
-            // TODO: implement
-            unreachable;
-            // const p = self.atom_hash[atom];
-            // p.header.ref_count -= 1;
+    // fn destroy_atom(self: *Self, atom: JSAtomRef) void {
+    //     if (!JSAtomEnum.is_const(atom)) {
+    //         // TODO: implement
+    //         unreachable;
+    //         // const p = self.atom_hash[atom];
+    //         // p.header.ref_count -= 1;
 
-            // if (p.header.ref_count > 0) {
-            //     return;
-            // }
+    //         // if (p.header.ref_count > 0) {
+    //         //     return;
+    //         // }
 
-            // self.free_atom_struct(p);
-            // p = rt->atom_array[i];
-            // if (--p->header.ref_count > 0)
-            //     return;
-            // JS_FreeAtomStruct(rt, p);
-        }
+    //         // self.free_atom_struct(p);
+    //         // p = rt->atom_array[i];
+    //         // if (--p->header.ref_count > 0)
+    //         //     return;
+    //         // JS_FreeAtomStruct(rt, p);
+    //     }
 
-        // TODO: implement
-        unreachable;
-        // if (!__JS_AtomIsConst(v))
-        // __JS_FreeAtom(rt, v);
+    //     // TODO: implement
+    //     unreachable;
+    //     // if (!__JS_AtomIsConst(v))
+    //     // __JS_FreeAtom(rt, v);
 
-    //     JSAtomStruct *p;
-    }
+    // //     JSAtomStruct *p;
+    // }
 
     fn destroy_atom_struct(self: *Self, atom: *JSAtomData) void {
         if (atom.atom_type != .JS_ATOM_TYPE_SYMBOL) {
@@ -5796,12 +5821,12 @@ const JSRuntime = struct {
 test "JSRuntime - init" {
     {
         var gpa = JSAllocator{};
-        defer std.testing.expect(!gpa.deinit());
+        defer std.testing.expect(!gpa.deinit()) catch unreachable;
 
         var runtime = try JSRuntime.init(&gpa);
         defer runtime.deinit();
 
-        testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms());
+        try testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms());
     }
 }
 
@@ -5815,7 +5840,7 @@ test "JSRuntime - deinit" {
 
         runtime.deinit();
 
-        testing.expect(!gpa.detectLeaks());
+        try testing.expect(!gpa.detectLeaks());
     }
 }
 
@@ -5830,8 +5855,8 @@ test "JSRuntime - new_context()" {
 
         var context = try runtime.new_context();
 
-        testing.expect(runtime.gc_obj_list.len == 1);
-        testing.expect(context.header.data.ref_count == 1);
+        try testing.expect(runtime.gc_obj_list.len == 1);
+        try testing.expect(context.header.data.ref_count == 1);
     }
 }
 
@@ -5848,10 +5873,10 @@ test "JSRuntime - run_gc()" {
 
         runtime.run_gc();
 
-        testing.expect(runtime.gc_obj_list.len == 1);
-        testing.expect(runtime.tmp_obj_list.len == 0);
-        testing.expect(runtime.gc_zero_ref_count_list.len == 0);
-        testing.expect(context.header.data.ref_count == 1);
+        try testing.expect(runtime.gc_obj_list.len == 1);
+        try testing.expect(runtime.tmp_obj_list.len == 0);
+        try testing.expect(runtime.gc_zero_ref_count_list.len == 0);
+        try testing.expect(context.header.data.ref_count == 1);
     }
 }
 
@@ -5867,10 +5892,10 @@ test "JSRuntime - new_atom_from_data()" {
         var data = try JSAtomData.initFromBuffer(&runtime, "abc", .JS_ATOM_TYPE_STRING);
         const atom = try runtime.new_atom_from_data(data);
 
-        testing.expectEqual(atom, JSAtomEnum.num_builtin_atoms());
-        testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
-        testing.expectEqual(runtime.atom_hash.count(), 1);
-        testing.expectEqual(data.header.ref_count, 1);
+        try testing.expectEqual(atom, JSAtomEnum.num_builtin_atoms());
+        try testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
+        try testing.expectEqual(runtime.atom_hash.count(), 1);
+        try testing.expectEqual(data.header.ref_count, 1);
     }
     {
         // de-duplicate strings
@@ -5886,11 +5911,11 @@ test "JSRuntime - new_atom_from_data()" {
         var data2 = try JSAtomData.initFromBuffer(&runtime, "abc", .JS_ATOM_TYPE_STRING);
         const atom2 = try runtime.new_atom_from_data(data2);
 
-        testing.expectEqual(atom1, JSAtomEnum.num_builtin_atoms());
-        testing.expectEqual(atom2, JSAtomEnum.num_builtin_atoms());
-        testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
-        testing.expectEqual(runtime.atom_hash.count(), 1);
-        testing.expectEqual(data1.header.ref_count, 2);
+        try testing.expectEqual(atom1, JSAtomEnum.num_builtin_atoms());
+        try testing.expectEqual(atom2, JSAtomEnum.num_builtin_atoms());
+        try testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
+        try testing.expectEqual(runtime.atom_hash.count(), 1);
+        try testing.expectEqual(data1.header.ref_count, 2);
     }
 
     {
@@ -5904,10 +5929,10 @@ test "JSRuntime - new_atom_from_data()" {
         var data = try JSAtomData.initFromBuffer(&runtime, "abc", .JS_ATOM_TYPE_GLOBAL_SYMBOL);
         const atom = try runtime.new_atom_from_data(data);
 
-        testing.expect(atom == JSAtomEnum.num_builtin_atoms());
-        testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
-        testing.expectEqual(runtime.atom_hash.count(), 1);
-        testing.expectEqual(data.header.ref_count, 1);
+        try testing.expect(atom == JSAtomEnum.num_builtin_atoms());
+        try testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
+        try testing.expectEqual(runtime.atom_hash.count(), 1);
+        try testing.expectEqual(data.header.ref_count, 1);
     }
     {
         // de-duplicate global symbols
@@ -5923,11 +5948,11 @@ test "JSRuntime - new_atom_from_data()" {
         var data2 = try JSAtomData.initFromBuffer(&runtime, "abc", .JS_ATOM_TYPE_GLOBAL_SYMBOL);
         const atom2 = try runtime.new_atom_from_data(data2);
 
-        testing.expectEqual(atom1, JSAtomEnum.num_builtin_atoms());
-        testing.expectEqual(atom2, JSAtomEnum.num_builtin_atoms());
-        testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
-        testing.expectEqual(runtime.atom_hash.count(), 1);
-        testing.expectEqual(data1.header.ref_count, 2);
+        try testing.expectEqual(atom1, JSAtomEnum.num_builtin_atoms());
+        try testing.expectEqual(atom2, JSAtomEnum.num_builtin_atoms());
+        try testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
+        try testing.expectEqual(runtime.atom_hash.count(), 1);
+        try testing.expectEqual(data1.header.ref_count, 2);
     }
 
     {
@@ -5941,10 +5966,10 @@ test "JSRuntime - new_atom_from_data()" {
         var data = try JSAtomData.initFromBuffer(&runtime, "abc", .JS_ATOM_TYPE_SYMBOL);
         const atom = try runtime.new_atom_from_data(data);
 
-        testing.expect(atom == JSAtomEnum.num_builtin_atoms());
-        testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
-        testing.expectEqual(runtime.atom_hash.count(), 0);
-        testing.expectEqual(data.header.ref_count, 1);
+        try testing.expect(atom == JSAtomEnum.num_builtin_atoms());
+        try testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
+        try testing.expectEqual(runtime.atom_hash.count(), 0);
+        try testing.expectEqual(data.header.ref_count, 1);
     }
     {
         // duplicate symbols
@@ -5960,12 +5985,12 @@ test "JSRuntime - new_atom_from_data()" {
         var data2 = try JSAtomData.initFromBuffer(&runtime, "abc", .JS_ATOM_TYPE_SYMBOL);
         const atom2 = try runtime.new_atom_from_data(data2);
 
-        testing.expectEqual(atom1,JSAtomEnum.num_builtin_atoms());
-        testing.expectEqual(atom2, JSAtomEnum.num_builtin_atoms() + 1);
-        testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 2);
-        testing.expectEqual(runtime.atom_hash.count(), 0);
-        testing.expectEqual(data1.header.ref_count, 1);
-        testing.expectEqual(data2.header.ref_count, 1);
+        try testing.expectEqual(atom1,JSAtomEnum.num_builtin_atoms());
+        try testing.expectEqual(atom2, JSAtomEnum.num_builtin_atoms() + 1);
+        try testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 2);
+        try testing.expectEqual(runtime.atom_hash.count(), 0);
+        try testing.expectEqual(data1.header.ref_count, 1);
+        try testing.expectEqual(data2.header.ref_count, 1);
     }
     {
         // deleted atom
@@ -5982,10 +6007,10 @@ test "JSRuntime - new_atom_from_data()" {
         var data2 = try JSAtomData.initFromBuffer(&runtime, "abc", .JS_ATOM_TYPE_STRING);
         const ref2 = try runtime.new_atom_from_data(data2);
 
-        testing.expectEqual(ref2, JSAtomEnum.num_builtin_atoms());
-        testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
-        testing.expectEqual(runtime.atom_hash.count(), 1);
-        testing.expectEqual(data2.header.ref_count, 1);
+        try testing.expectEqual(ref2, JSAtomEnum.num_builtin_atoms());
+        try testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
+        try testing.expectEqual(runtime.atom_hash.count(), 1);
+        try testing.expectEqual(data2.header.ref_count, 1);
     }
 }
 
@@ -6003,10 +6028,10 @@ test "JSRuntime - new_atom_string_ref()" {
 
         var data = runtime.get_atom_data(ref).?;
 
-        testing.expectEqual(ref, JSAtomEnum.num_builtin_atoms());
-        testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
-        testing.expectEqual(runtime.atom_hash.count(), 1);
-        testing.expectEqual(data.header.ref_count, 1);
+        try testing.expectEqual(ref, JSAtomEnum.num_builtin_atoms());
+        try testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
+        try testing.expectEqual(runtime.atom_hash.count(), 1);
+        try testing.expectEqual(data.header.ref_count, 1);
     }
 
     {
@@ -6024,10 +6049,10 @@ test "JSRuntime - new_atom_string_ref()" {
 
         var data = runtime.get_atom_data(ref).?;
 
-        testing.expectEqual(ref, JSAtomEnum.num_builtin_atoms());
-        testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
-        testing.expectEqual(runtime.atom_hash.count(), 1);
-        testing.expectEqual(data.header.ref_count, 2);
+        try testing.expectEqual(ref, JSAtomEnum.num_builtin_atoms());
+        try testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
+        try testing.expectEqual(runtime.atom_hash.count(), 1);
+        try testing.expectEqual(data.header.ref_count, 2);
     }
 }
 
@@ -6047,13 +6072,13 @@ test "JSRuntime - release_atom_ref()" {
 
         var data = runtime.get_atom_data(ref);
 
-        testing.expectEqual(data, null);
-        testing.expectEqual(ref, JSAtomEnum.num_builtin_atoms());
+        try testing.expectEqual(data, null);
+        try testing.expectEqual(ref, JSAtomEnum.num_builtin_atoms());
 
         // The array and hash table still keep the space open for the atom though
         // this way the hash table references won't get invalidated.
-        testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
-        testing.expectEqual(runtime.atom_hash.count(), 1);
+        try testing.expectEqual(runtime.atom_array.items.len, JSAtomEnum.num_builtin_atoms() + 1);
+        try testing.expectEqual(runtime.atom_hash.count(), 1);
     }
 }
 

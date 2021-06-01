@@ -32,19 +32,19 @@ test "utf8ToUtf16LeAlloc()" {
     {
         const array = try utf8ToUtf16LeAlloc(testing.allocator, "𐐷");
         defer array.deinit();
-        testing.expectEqual(@as(usize, 2), array.items.len);
-        testing.expectEqualSlices(u8, "\x01\xd8\x37\xdc", mem.sliceAsBytes(array.items[0..]));
+        try testing.expectEqual(@as(usize, 2), array.items.len);
+        try testing.expectEqualSlices(u8, "\x01\xd8\x37\xdc", mem.sliceAsBytes(array.items[0..]));
     }
     {
         const array = try utf8ToUtf16LeAlloc(testing.allocator, "\u{1F600}"); // 😀
         defer array.deinit();
-        testing.expectEqual(@as(usize, 2), array.items.len);
-        testing.expectEqualSlices(u8, "\x3D\xD8\x00\xDE", mem.sliceAsBytes(array.items[0..]));
+        try testing.expectEqual(@as(usize, 2), array.items.len);
+        try testing.expectEqualSlices(u8, "\x3D\xD8\x00\xDE", mem.sliceAsBytes(array.items[0..]));
     }
     {
         const array = try utf8ToUtf16LeAlloc(testing.allocator, "a");
         defer array.deinit();
-        testing.expectEqual(@as(usize, 1), array.items.len);
-        testing.expectEqualSlices(u8, "\x61\x00", mem.sliceAsBytes(array.items[0..]));
+        try testing.expectEqual(@as(usize, 1), array.items.len);
+        try testing.expectEqualSlices(u8, "\x61\x00", mem.sliceAsBytes(array.items[0..]));
     }
 }
