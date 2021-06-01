@@ -34,7 +34,7 @@ pub fn build(b: *std.build.Builder) void {
     // const cutils_tests = b.addTest("src/cutils.zig");
     // cutils_tests.setBuildMode(mode);
 
-    const unicode_tests = b.addTest("src/libunicode.zig");
+    const unicode_tests = b.addTest("src/unicode.zig");
     unicode_tests.setBuildMode(mode);
 
     // const regex_tests = b.addTest("src/libregexp.zig");

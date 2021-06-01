@@ -136,7 +136,7 @@ const JSTag = enum(i6) {
 };
 
 const JSValue = union(JSTag) {
-    JS_TAG_SYMBOL: JSAtomRef,
+    JS_TAG_SYMBOL: *JSAtomData,
     JS_TAG_MODULE: *JSModuleDef,
     JS_TAG_STRING: *JSString,
     JS_TAG_OBJECT: *JSObject,
@@ -152,11 +152,39 @@ const JSValue = union(JSTag) {
 
     const Self = @This();
 
+    /// Creates a new JSValue that represents the given integer.
+    pub fn initInt(int: i32) Self {
+        return .{
+            .JS_TAG_INT = int
+        };
+    }
+
+    /// Creates a new JSValue that represents the given string.
+    pub fn initString(str: *JSString) Self {
+        return .{
+            .JS_TAG_STRING = str
+        };
+    }
+
+    /// Creates a new JSValue that represents the given symbol.
+    pub fn initSymbol(symbol: *JSAtomData) Self {
+        return .{
+            .JS_TAG_SYMBOL = symbol
+        };
+    }
+
+    /// Creates a new JSValue that references the given object.
+    pub fn initObj(obj: *JSObject) Self {
+        return .{
+            .JS_TAG_OBJECT = obj
+        };
+    }
+
     /// Duplicates this value by incrementing the ref_count of the attached object.
     /// Returns a copy of the value.
-    pub fn dupe(self: *Self, context: *JSContext) JSValue {
+    pub fn dupe(self: *Self) JSValue {
         if (self.get_gc_header()) |header| {
-            header.data.add_ref();
+            header.add_ref();
         }
         return self;
     }
@@ -890,11 +918,11 @@ const JSPropertyType = enum {
     AUTO_INIT
 };
 
-const JSProperty = union(JSPropertyType) {
-    VALUE: JSValue,
-    GETSET: JSPropertyGetterSetter,
-    VAR_REF: *JSVarRef,
-    AUTO_INIT: JSPropertyAutoInit
+const JSProperty = union {
+    value: JSValue,
+    getset: JSPropertyGetterSetter,
+    var_ref: *JSVarRef,
+    auto_init: JSPropertyAutoInit,
 };
 
 // typedef struct JSProperty {
@@ -1732,7 +1760,7 @@ const JSObject = struct {
                 
                 var oldShape = self.shape;
                 self.shape = shape.duplicate();
-                context.runtime.free_shape(oldShape);
+                context.runtime.release_shape(oldShape);
 
                 return try self.properties.addOne();
             } else if(self.shape.header.data.ref_count != 1) {
@@ -1742,7 +1770,7 @@ const JSObject = struct {
 
                 newShape.is_hashed = true;
                 try context.runtime.add_shape(newShape);
-                context.runtime.free_shape(self.shape);
+                context.runtime.release_shape(self.shape);
 
                 self.shape = newShape;
             }
@@ -1864,6 +1892,108 @@ const JSObject = struct {
         // sh->prop_hash_end[-h - 1] = sh->prop_count;
         // return 0;
     }
+
+    /// Finds the property definition for the given property name.
+    /// Returns null if the property has not been defined.
+    pub fn find_own_property(self: *Self, prop_name: JSAtomRef) ?JSPropertyDef {
+        var shape = self.shape;
+        if (shape.prop_hash.get(prop_name)) |prop_idx| {
+            var prop_shape = &shape.properties.items[prop_idx];
+            var prop = &self.properties.items[prop_idx];
+
+            return .{
+                .property = prop,
+                .property_shape = prop_shape
+            };
+        }
+
+        return null;
+
+        // JSShape *sh;
+        // JSShapeProperty *pr, *prop;
+        // intptr_t h;
+        // sh = p->shape;
+        // h = (uintptr_t)atom & sh->prop_hash_mask;
+        // h = sh->prop_hash_end[-h - 1];
+        // prop = get_shape_prop(sh);
+        // while (h) {
+        //     pr = &prop[h - 1];
+        //     if (likely(pr->atom == atom)) {
+        //         *ppr = &p->prop[h - 1];
+        //         /* the compiler should be able to assume that pr != NULL here */
+        //         return pr;
+        //     }
+        //     h = pr->hash_next;
+        // }
+        // *ppr = NULL;
+        // return NULL;
+    }
+
+    pub const JSPropertyDef = struct {
+        property: *JSProperty,
+        property_shape: *JSShapeProperty,
+    };
+
+    /// Prepares this object's shape for updating the given property.
+    /// Depending on how many references the shape has, it will either be cloned or removed from the shape hash table.
+    /// The returned struct will contain the resulting shape and a reference to the property that should be updated.
+    /// The returned shape will not be hashed and will not be in the shape hash table.
+    pub fn prepare_shape_property_update(self: *Self, context: *JSContext, property_shape: *JSShapeProperty) !JSPreparedShapePropertyUpdate {
+        if (self.shape.is_hashed) {
+            if (self.shape.header.data.ref_count > 1) {
+                // We know that property_shape belongs to self.shape.properties
+                // so we can use some pointer math to find the index.
+                var idx = @ptrToInt(property_shape) - @ptrToInt(self.shape.properties.items.ptr);
+                var new_shape = try self.shape.clone(context);
+
+                context.runtime.release_shape(self.shape);
+                self.shape = new_shape;
+
+                var new_shape_property = @intToPtr(*JSShapeProperty, @ptrToInt(self.shape.properties.items.ptr) + idx);
+
+                return .{
+                    .property_shape = new_shape_property,
+                    .shape = new_shape
+                };
+            } else {
+                context.runtime.remove_shape(self.shape);
+                self.shape.is_hashed = false;
+            }
+        }
+
+        return .{
+            .property_shape = property_shape,
+            .shape = self.shape,
+        };
+
+        // JSShape *sh;
+        // uint32_t idx = 0;    /* prevent warning */
+
+        // sh = p->shape;
+        // if (sh->is_hashed) {
+        //     if (sh->header.ref_count != 1) {
+        //         if (pprs)
+        //             idx = *pprs - get_shape_prop(sh);
+        //         /* clone the shape (the resulting one is no longer hashed) */
+        //         sh = js_clone_shape(ctx, sh);
+        //         if (!sh)
+        //             return -1;
+        //         js_free_shape(ctx->rt, p->shape);
+        //         p->shape = sh;
+        //         if (pprs)
+        //             *pprs = get_shape_prop(sh) + idx;
+        //     } else {
+        //         js_shape_hash_unlink(ctx->rt, sh);
+        //         sh->is_hashed = FALSE;
+        //     }
+        // }
+        // return 0;
+    }
+
+    pub const JSPreparedShapePropertyUpdate = struct {
+        property_shape: *JSShapeProperty,
+        shape: *JSShape,
+    };
 };
 
 test "JSObject.newObject()" {
@@ -2850,8 +2980,45 @@ const JS_PROP_NO_ADD: u32 = (1 << 16);
 /// internal use
 const JS_PROP_NO_EXOTIC: u32 =(1 << 17);
 
+/// Determines if the given new property flags are compatible with the current flags.
+/// Returns true if the new flags can be applied to the property.
+/// Returns false if the new flags are incompatible with the current flags.
+fn can_define_prop_flags(current_flags: u32, new_flags: u32) bool {
+    if (!(current_flags & JS_PROP_CONFIGURABLE)) {
+        if ((new_flags & (JS_PROP_HAS_CONFIGURABLE | JS_PROP_CONFIGURABLE)) ==
+            (JS_PROP_HAS_CONFIGURABLE | JS_PROP_CONFIGURABLE)) {
+            return false;
+        }
+        if ((new_flags & JS_PROP_HAS_ENUMERABLE) and
+            (new_flags & JS_PROP_ENUMERABLE) != (current_flags & JS_PROP_ENUMERABLE))
+            return false;
+    }
+    if (new_flags & (JS_PROP_HAS_VALUE | JS_PROP_HAS_WRITABLE |
+                 JS_PROP_HAS_GET | JS_PROP_HAS_SET)) {
+        if (!(current_flags & JS_PROP_CONFIGURABLE)) {
+            const has_accessor = ((new_flags & (JS_PROP_HAS_GET | JS_PROP_HAS_SET)) != 0);
+            const is_getset = ((current_flags & JS_PROP_TMASK) == JS_PROP_GETSET);
+            if (has_accessor != is_getset) {
+                return false;
+            }
+            if (!has_accessor and !is_getset and !(current_flags & JS_PROP_WRITABLE)) {
+                // not writable: cannot set the writable bit
+                if ((new_flags & (JS_PROP_HAS_WRITABLE | JS_PROP_WRITABLE)) ==
+                    (JS_PROP_HAS_WRITABLE | JS_PROP_WRITABLE))
+                    return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 const JS_NULL = JSValue{
     .JS_TAG_NULL = {}
+};
+
+const JS_UNDEFINED = JSValue {
+    .JS_TAG_UNDEFINED = {}
 };
 
 fn JS_NAN() JSValue { 
@@ -3007,7 +3174,7 @@ const JSClass = struct {
     class_name: JSAtomRef,
     finalizer: ?JSClassFinalizer,
     gc_mark: ?JSClassGCMark,
-    call: *JSClassCall,
+    call: ?*JSClassCall,
     exotic: ?*const JSClassExoticMethods
 
     // JSClassFinalizer *finalizer;
@@ -3130,7 +3297,7 @@ const JSShapeProperty = struct {
     // JSAtomRef atom; /* JS_ATOM_NULL = free property entry */
 };
 
-const JSHashedProperties = std.AutoArrayHashMap(JSAtomRef, JSValue);
+const JSHashedProperties = std.AutoArrayHashMap(JSAtomRef, usize);
 
 const JSShape = struct {
     header: JSGCObjectHeaderNode,
@@ -3153,6 +3320,8 @@ const JSShape = struct {
     proto: ?*JSObject,
     properties: std.ArrayList(JSShapeProperty),
 
+    /// A map between property names (atoms) and
+    /// the index that they are stored in the properties array.
     prop_hash: JSHashedProperties,
 
     // uint32_t prop_hash_end[0]; /* hash table of size hash_mask + 1
@@ -3263,7 +3432,8 @@ const JSShape = struct {
         return self;
     }
 
-    /// Clones this shape.
+    /// Clones this shape. The returned shape is not hashed and is not added
+    /// to the runtime shape hash table.
     /// The returned shape is owned by the JSContext.
     pub fn clone(self: *Self, context: *JSContext) !*JSShape {
         var newShape = try Self.initFromProtoWithSizes(context, self.proto, 0, self.properties.items.len);
@@ -3577,6 +3747,7 @@ const JSContext = struct {
 
         var name_atom = self.runtime.new_atom_ref(name);
         defer self.runtime.release_atom_ref(name_atom);
+        
 
         // JSValue func_obj;
         // JSObject *p;
@@ -3603,26 +3774,422 @@ const JSContext = struct {
         // return func_obj;
     }
 
-    /// Creates a new atom with the given name and returns the identifier for it.
-    pub fn new_atom(self: *Self, name: []const u8) !JSAtomRef {
+    /// Sets the name and length properties of the given function object.
+    pub fn function_set_properties(self: *Self, func: JSValue, name: JSAtomRef, length: u8) void {
+        // /* ES6 feature non compatible with ES5.1: length is configurable */
+        try self.define_property_value(func, @enumToInt(JSAtomEnum.JS_ATOM_length), JSValue.initInt(len), JS_PROP_CONFIGURABLE);
+        try self.define_property_value(func, @enumToInt(JSAtomEnum.JS_ATOM_name), self.runtime.get_atom_string(name), JS_PROP_CONFIGURABLE);
+        // JS_DefinePropertyValue(ctx, func_obj, JS_ATOM_length, JS_NewInt32(ctx, len),
+        //                     JS_PROP_CONFIGURABLE);
+        // JS_DefinePropertyValue(ctx, func_obj, JS_ATOM_name,
+        //                     JS_AtomToString(ctx, name), JS_PROP_CONFIGURABLE);
+    }
 
-        var str = try JSString.initFromBuffer(self, name);
+    /// Defines and sets the given property on the given object to the given value with the specified flags.
+    /// The given value is consumed by this function but the callee retains ownership of this_obj.
+    pub fn define_property_value(self: *Self, this_obj: JSValue, prop: JSAtomRef, value: JSValue, flags: u32) !void {
+        defer value.release();
 
+    // ret = JS_DefineProperty(ctx, this_obj, prop, val, JS_UNDEFINED, JS_UNDEFINED,
+    //                             flags | JS_PROP_HAS_VALUE | JS_PROP_HAS_CONFIGURABLE | JS_PROP_HAS_WRITABLE | JS_PROP_HAS_ENUMERABLE);
+    //     JS_FreeValue(ctx, val);
+    }
 
+    const DefinePropertyError = error {
+        NotAnObject,
+        PropertyNotConfigurable
+    };
 
-        
+    /// Defines and sets the given property on the given object. Optionally takes a value, getter, or setter depending on how the property
+    /// should behave.
+    /// The callee retains ownership of all the given values.
+    fn define_property(self: *Self, this_obj: JSValue, prop: JSAtomRef, value: JSValue, getter: JSValue, setter: JSValue, flags: u32) DefinePropertyError!void {
+        var obj: *JSObject = switch(this_obj) {
+            .JS_TAG_OBJECT => |obj| obj,
+            else => return DefinePropertyError.NotAnObject
+        };
 
-        // JSValue val;
+        if (obj.find_own_property(prop)) |prop_def| {
+            var prop_shape = prop_def.property_shape;
+            var prop = prop_def.property;
 
-        // if (len == 0 || !is_digit(*str)) {
-        //     JSAtomRef atom = __JS_FindAtom(ctx->rt, str, len, JS_ATOM_TYPE_STRING);
-        //     if (atom)
-        //         return atom;
-        // }
-        // val = JS_NewStringLen(ctx, str, len);
-        // if (JS_IsException(val))
-        //     return JS_ATOM_NULL;
-        // return JS_NewAtomStr(ctx, JS_VALUE_GET_STRING(val));
+            // property already exists
+            if (!can_define_prop_flags(prop_def.property_shape.flags, flags)) {
+                return DefinePropertyError.PropertyNotConfigurable;
+            }
+    
+            if (flags & (JS_PROP_HAS_VALUE | JS_PROP_HAS_WRITABLE | JS_PROP_HAS_GET | JS_PROP_HAS_SET) != 0) {
+                // new property uses getters and setters
+                if (flags & (JS_PROP_HAS_GET | JS_PROP_HAS_SET) != 0) {
+                    var new_getter: ?*JSObject = null;
+                    var new_setter: ?*JSObject = null;
+
+                    if (self.get_function(getter)) |func| {
+                        new_getter = func;
+                    }
+
+                    if (self.get_function(setter)) |func| {
+                        new_setter = func;
+                    }
+
+                    // if old property type does not use getters and setters.
+                    if ((prop_shape.flags & JS_PROP_TMASK) != JS_PROP_GETSET) {
+                        var prepared = try obj.prepare_shape_property_update(self, prop_shape);
+                        prop_shape = prepared.property_shape;
+
+                        // Convert the new property shape to getset
+                        if ((prop_shape.flags & JS_PROP_TMASK) == JS_PROP_VARREF) {
+                            self.runtime.release_var_ref(prop.var_ref);
+                        } else if ((prop_shape.flags & JS_PROP_TMASK) == JS_PROP_AUTOINIT) {
+                            // clear property and update
+                            var p = try obj.prepare_shape_property_update(self, prop_shape);
+                            prop_shape = p.property_shape;
+                            self.runtime.destroy_autoinit(prop);
+
+                            prop_shape.flags &= ~JS_PROP_TMASK;
+                            prop.* = .{
+                                .value = JS_UNDEFINED
+                            };
+
+                            return self.define_property(this_obj, prop, value, getter, setter, flags);
+
+    //                         /* clear property and update */
+    // //                         if (js_shape_prepare_update(ctx, p, &prs))
+    // //                             return -1;
+    // //                         js_autoinit_free(ctx->rt, pr);
+    // //                         prs->flags &= ~JS_PROP_TMASK;
+    // //                         pr->u.value = JS_UNDEFINED;
+    // //                         goto retry;
+                        } else {
+                            self.runtime.release_value(prop.value);
+                            // JS_FreeValue(ctx, pr->u.value);
+                        }
+
+                        prop_shape.flags = (prop_shape.flags & (JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE)) | JS_PROP_GETSET;
+                        prop.* = .{
+                            .getset = .{
+                                .getter = null,
+                                .setter = null
+                            }
+                        };
+                        // prs->flags = (prs->flags &
+    //                                 (JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE)) |
+    //                         JS_PROP_GETSET;
+    //                     pr->u.getset.getter = NULL;
+    //                     pr->u.getset.setter = NULL;
+                    } else {
+                        // old property is not configurable
+                        if (prop_shape.flags & JS_PROP_CONFIGURABLE == 0) {
+                            if ((flags & JS_PROP_HAS_GET) and
+                                new_getter != prop.getset.getter) {
+                                return DefinePropertyError.PropertyNotConfigurable;
+                            }
+                            if ((flags & JS_PROP_HAS_SET) and
+                                new_setter != prop.getset.setter) {
+                                return DefinePropertyError.PropertyNotConfigurable;
+                            }
+                        }
+                    }
+
+                    if (flags & JS_PROP_HAS_GET != 0) {
+                        if (prop.getset.getter) |getter| {
+                            self.runtime.release_value(JSValue.initObj(getter));
+                        }
+                        if (new_getter) |getter| {
+                            getter.duplicate();
+                        }
+                        prop.getset.getter = new_getter;
+                    }
+                    if (flags & JS_PROP_HAS_SET != 0) {
+                        if (prop.getset.setter) |setter| {
+                            self.runtime.release_value(JSValue.initObj(setter));
+                        }
+                        if (new_setter) |setter| {
+                            setter.duplicate();
+                        }
+                        prop.getset.setter = new_setter;
+                    }
+                    // if (flags & JS_PROP_HAS_GET) {
+    //                     if (pr->u.getset.getter)
+    //                         JS_FreeValue(ctx, JS_MKPTR(JS_TAG_OBJECT, pr->u.getset.getter));
+    //                     if (new_getter)
+    //                         JS_DupValue(ctx, getter);
+    //                     pr->u.getset.getter = new_getter;
+    //                 }
+    //                 if (flags & JS_PROP_HAS_SET) {
+    //                     if (pr->u.getset.setter)
+    //                         JS_FreeValue(ctx, JS_MKPTR(JS_TAG_OBJECT, pr->u.getset.setter));
+    //                     if (new_setter)
+    //                         JS_DupValue(ctx, setter);
+    //                     pr->u.getset.setter = new_setter;
+    //                 }
+                } else {
+                    // new prop uses a value
+                    // TODO: finish porting
+                }
+            }
+        }
+    
+    //     retry:
+    //         if (flags & (JS_PROP_HAS_VALUE | JS_PROP_HAS_WRITABLE |
+    //                     JS_PROP_HAS_GET | JS_PROP_HAS_SET)) {
+    //             if (flags & (JS_PROP_HAS_GET | JS_PROP_HAS_SET)) {
+    //                 JSObject *new_getter, *new_setter;
+
+    //                 if (JS_IsFunction(ctx, getter)) {
+    //                     new_getter = JS_VALUE_GET_OBJ(getter);
+    //                 } else {
+    //                     new_getter = NULL;
+    //                 }
+    //                 if (JS_IsFunction(ctx, setter)) {
+    //                     new_setter = JS_VALUE_GET_OBJ(setter);
+    //                 } else {
+    //                     new_setter = NULL;
+    //                 }
+
+    //                 if ((prs->flags & JS_PROP_TMASK) != JS_PROP_GETSET) {
+    //                     if (js_shape_prepare_update(ctx, p, &prs))
+    //                         return -1;
+    //                     /* convert to getset */
+    //                     if ((prs->flags & JS_PROP_TMASK) == JS_PROP_VARREF) {
+    //                         free_var_ref(ctx->rt, pr->u.var_ref);
+    //                     } else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_AUTOINIT) {
+    //                         /* clear property and update */
+    //                         if (js_shape_prepare_update(ctx, p, &prs))
+    //                             return -1;
+    //                         js_autoinit_free(ctx->rt, pr);
+    //                         prs->flags &= ~JS_PROP_TMASK;
+    //                         pr->u.value = JS_UNDEFINED;
+    //                         goto retry;
+    //                     } else {
+    //                         JS_FreeValue(ctx, pr->u.value);
+    //                     }
+    //                     prs->flags = (prs->flags &
+    //                                 (JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE)) |
+    //                         JS_PROP_GETSET;
+    //                     pr->u.getset.getter = NULL;
+    //                     pr->u.getset.setter = NULL;
+    //                 } else {
+    //                     if (!(prs->flags & JS_PROP_CONFIGURABLE)) {
+    //                         if ((flags & JS_PROP_HAS_GET) &&
+    //                             new_getter != pr->u.getset.getter) {
+    //                             goto not_configurable;
+    //                         }
+    //                         if ((flags & JS_PROP_HAS_SET) &&
+    //                             new_setter != pr->u.getset.setter) {
+    //                             goto not_configurable;
+    //                         }
+    //                     }
+    //                 }
+    //                 if (flags & JS_PROP_HAS_GET) {
+    //                     if (pr->u.getset.getter)
+    //                         JS_FreeValue(ctx, JS_MKPTR(JS_TAG_OBJECT, pr->u.getset.getter));
+    //                     if (new_getter)
+    //                         JS_DupValue(ctx, getter);
+    //                     pr->u.getset.getter = new_getter;
+    //                 }
+    //                 if (flags & JS_PROP_HAS_SET) {
+    //                     if (pr->u.getset.setter)
+    //                         JS_FreeValue(ctx, JS_MKPTR(JS_TAG_OBJECT, pr->u.getset.setter));
+    //                     if (new_setter)
+    //                         JS_DupValue(ctx, setter);
+    //                     pr->u.getset.setter = new_setter;
+    //                 }
+    //             } else {
+    //                 if ((prs->flags & JS_PROP_TMASK) == JS_PROP_GETSET) {
+    //                     /* convert to data descriptor */
+    //                     if (js_shape_prepare_update(ctx, p, &prs))
+    //                         return -1;
+    //                     if (pr->u.getset.getter)
+    //                         JS_FreeValue(ctx, JS_MKPTR(JS_TAG_OBJECT, pr->u.getset.getter));
+    //                     if (pr->u.getset.setter)
+    //                         JS_FreeValue(ctx, JS_MKPTR(JS_TAG_OBJECT, pr->u.getset.setter));
+    //                     prs->flags &= ~(JS_PROP_TMASK | JS_PROP_WRITABLE);
+    //                     pr->u.value = JS_UNDEFINED;
+    //                 } else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_VARREF) {
+    //                     /* Note: JS_PROP_VARREF is always writable */
+    //                 } else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_AUTOINIT) {
+    //                     /* clear property and update */
+    //                     if (js_shape_prepare_update(ctx, p, &prs))
+    //                         return -1;
+    //                     js_autoinit_free(ctx->rt, pr);
+    //                     prs->flags &= ~JS_PROP_TMASK;
+    //                     pr->u.value = JS_UNDEFINED;
+    //                 } else {
+    //                     if ((prs->flags & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE)) == 0 &&
+    //                         (flags & JS_PROP_HAS_VALUE) &&
+    //                         !js_same_value(ctx, val, pr->u.value)) {
+    //                         goto not_configurable;
+    //                     }
+    //                 }
+    //                 if (prs->flags & JS_PROP_LENGTH) {
+    //                     if (flags & JS_PROP_HAS_VALUE) {
+    //                         res = set_array_length(ctx, p, pr, JS_DupValue(ctx, val),
+    //                                             flags);
+    //                     } else {
+    //                         res = TRUE;
+    //                     }
+    //                     /* still need to reset the writable flag if needed.
+    //                     The JS_PROP_LENGTH is reset to have the correct
+    //                     read-only behavior in JS_SetProperty(). */
+    //                     if ((flags & (JS_PROP_HAS_WRITABLE | JS_PROP_WRITABLE)) ==
+    //                         JS_PROP_HAS_WRITABLE) {
+    //                         prs = get_shape_prop(p->shape);
+    //                         if (js_update_property_flags(ctx, p, &prs,
+    //                                                     prs->flags & ~(JS_PROP_WRITABLE | JS_PROP_LENGTH)))
+    //                             return -1;
+    //                     }
+    //                     return res;
+    //                 } else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_VARREF) {
+    //                     if (flags & JS_PROP_HAS_VALUE) {
+    //                         if (p->class_id == JS_CLASS_MODULE_NS) {
+    //                             /* JS_PROP_WRITABLE is always true for variable
+    //                             references, but they are write protected in module name
+    //                             spaces. */
+    //                             if (!js_same_value(ctx, val, *pr->u.var_ref->pvalue))
+    //                                 goto not_configurable;
+    //                         }
+    //                         /* update the reference */
+    //                         set_value(ctx, pr->u.var_ref->pvalue,
+    //                                 JS_DupValue(ctx, val));
+    //                     }
+    //                     /* if writable is set to false, no longer a
+    //                     reference (for mapped arguments) */
+    //                     if ((flags & (JS_PROP_HAS_WRITABLE | JS_PROP_WRITABLE)) == JS_PROP_HAS_WRITABLE) {
+    //                         JSValue val1;
+    //                         if (js_shape_prepare_update(ctx, p, &prs))
+    //                             return -1;
+    //                         val1 = JS_DupValue(ctx, *pr->u.var_ref->pvalue);
+    //                         free_var_ref(ctx->rt, pr->u.var_ref);
+    //                         pr->u.value = val1;
+    //                         prs->flags &= ~(JS_PROP_TMASK | JS_PROP_WRITABLE);
+    //                     }
+    //                 } else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_AUTOINIT) {
+    //                     /* XXX: should never happen, type was reset above */
+    //                     abort();
+    //                 } else {
+    //                     if (flags & JS_PROP_HAS_VALUE) {
+    //                         JS_FreeValue(ctx, pr->u.value);
+    //                         pr->u.value = JS_DupValue(ctx, val);
+    //                     }
+    //                     if (flags & JS_PROP_HAS_WRITABLE) {
+    //                         if (js_update_property_flags(ctx, p, &prs,
+    //                                                     (prs->flags & ~JS_PROP_WRITABLE) |
+    //                                                     (flags & JS_PROP_WRITABLE)))
+    //                             return -1;
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //         mask = 0;
+    //         if (flags & JS_PROP_HAS_CONFIGURABLE)
+    //             mask |= JS_PROP_CONFIGURABLE;
+    //         if (flags & JS_PROP_HAS_ENUMERABLE)
+    //             mask |= JS_PROP_ENUMERABLE;
+    //         if (js_update_property_flags(ctx, p, &prs,
+    //                                     (prs->flags & ~mask) | (flags & mask)))
+    //             return -1;
+    //         return TRUE;
+    //     }
+
+    //     /* handle modification of fast array elements */
+    //     if (p->fast_array) {
+    //         uint32_t idx;
+    //         uint32_t prop_flags;
+    //         if (p->class_id == JS_CLASS_ARRAY) {
+    //             if (__JS_AtomIsTaggedInt(prop)) {
+    //                 idx = __JS_AtomToUInt32(prop);
+    //                 if (idx < p->u.array.count) {
+    //                     prop_flags = get_prop_flags(flags, JS_PROP_C_W_E);
+    //                     if (prop_flags != JS_PROP_C_W_E)
+    //                         goto convert_to_slow_array;
+    //                     if (flags & (JS_PROP_HAS_GET | JS_PROP_HAS_SET)) {
+    //                     convert_to_slow_array:
+    //                         if (convert_fast_array_to_array(ctx, p))
+    //                             return -1;
+    //                         else
+    //                             goto redo_prop_update;
+    //                     }
+    //                     if (flags & JS_PROP_HAS_VALUE) {
+    //                         set_value(ctx, &p->u.array.u.values[idx], JS_DupValue(ctx, val));
+    //                     }
+    //                     return TRUE;
+    //                 }
+    //             }
+    //         } else if (p->class_id >= JS_CLASS_UINT8C_ARRAY &&
+    //                 p->class_id <= JS_CLASS_FLOAT64_ARRAY) {
+    //             JSValue num;
+    //             int ret;
+
+    //             if (!__JS_AtomIsTaggedInt(prop)) {
+    //                 /* slow path with to handle all numeric indexes */
+    //                 num = JS_AtomIsNumericIndex1(ctx, prop);
+    //                 if (JS_IsUndefined(num))
+    //                     goto typed_array_done;
+    //                 if (JS_IsException(num))
+    //                     return -1;
+    //                 ret = JS_NumberIsInteger(ctx, num);
+    //                 if (ret < 0) {
+    //                     JS_FreeValue(ctx, num);
+    //                     return -1;
+    //                 }
+    //                 if (!ret) {
+    //                     JS_FreeValue(ctx, num);
+    //                     return JS_ThrowTypeErrorOrFalse(ctx, flags, "non integer index in typed array");
+    //                 }
+    //                 ret = JS_NumberIsNegativeOrMinusZero(ctx, num);
+    //                 JS_FreeValue(ctx, num);
+    //                 if (ret) {
+    //                     return JS_ThrowTypeErrorOrFalse(ctx, flags, "negative index in typed array");
+    //                 }
+    //                 if (!__JS_AtomIsTaggedInt(prop))
+    //                     goto typed_array_oob;
+    //             }
+    //             idx = __JS_AtomToUInt32(prop);
+    //             /* if the typed array is detached, p->u.array.count = 0 */
+    //             if (idx >= typed_array_get_length(ctx, p)) {
+    //             typed_array_oob:
+    //                 return JS_ThrowTypeErrorOrFalse(ctx, flags, "out-of-bound index in typed array");
+    //             }
+    //             prop_flags = get_prop_flags(flags, JS_PROP_ENUMERABLE | JS_PROP_WRITABLE);
+    //             if (flags & (JS_PROP_HAS_GET | JS_PROP_HAS_SET) ||
+    //                 prop_flags != (JS_PROP_ENUMERABLE | JS_PROP_WRITABLE)) {
+    //                 return JS_ThrowTypeErrorOrFalse(ctx, flags, "invalid descriptor flags");
+    //             }
+    //             if (flags & JS_PROP_HAS_VALUE) {
+    //                 return JS_SetPropertyValue(ctx, this_obj, JS_NewInt32(ctx, idx), JS_DupValue(ctx, val), flags);
+    //             }
+    //             return TRUE;
+    //         typed_array_done: ;
+    //         }
+    //     }
+
+    //     return JS_CreateProperty(ctx, p, prop, val, getter, setter, flags);
+    }
+
+    /// Gets the function object that is stored in this value.
+    /// If the value does not represent a function, then null is returned.
+    pub fn get_function(self: *Self, value: JSValue) ?*JSObject {
+        var obj: *JSObject = switch(value) {
+            .JS_TAG_OBJECT => |o| o,
+            else => return null
+        };
+
+        switch(obj.data) {
+            .JS_CLASS_BYTECODE_FUNCTION => |bytecode| return obj,
+            .JS_CLASS_PROXY => |proxy| {
+                if (proxy.is_func) {
+                    return obj;
+                }
+            },
+            else => {
+                var class = &self.runtime.classes.items[obj.class_id];
+                if (class.call) |c| {
+                    return obj;
+                }
+            }
+        }
+        return null;
     }
 
     /// Creates a new value from the given prototype with the given class.
@@ -4094,6 +4661,63 @@ const JSRuntime = struct {
         return self.atom_array.items[ref];
     }
 
+    /// Gets the value of the given atom as a JSValue.
+    /// The returned JSValue can be either a string or a symbol.
+    pub fn get_atom_value(self: *Self, ref: JSAtomRef) JSValue {
+        return self.get_atom_value_core(ref, false);
+    }
+
+    /// Gets the value of the given atom as a string.
+    /// The returned JSValue will always be a string.
+    pub fn get_atom_string(self: *Self, ref: JSAtomRef) JSValue {
+        return self.get_atom_value_core(ref, true);
+    }
+
+    /// Gets the value of the given atom.
+    /// Returns the string contained by the atom data as a JSValue object.
+    fn get_atom_value_core(self: *Self, ref: JSAtomRef, force_string: bool) JSValue {
+        // TODO: Support tagged integer atoms
+        std.debug.assert(ref < self.atom_array.items.len);
+        var atom = self.atom_array.items[ref];
+        if (atom.atom_type == .JS_ATOM_TYPE_STRING or force_string) {
+            if (atom.ato_type != .JS_ATOM_TYPE_STRING) {
+                atom = self.atom_array.items[@enumToInt(JSAtomEnum.JS_ATOM_empty_string)];
+            }
+            var val = JSValue.initString(atom);
+            val.dupe();
+            return val;
+        }
+
+        var val = JSValue.initSymbol(atom);
+        val.dupe();
+        return val;
+
+
+        // char buf[ATOM_GET_STR_BUF_SIZE];
+
+        // if (__JS_AtomIsTaggedInt(atom)) {
+        //     snprintf(buf, sizeof(buf), "%u", __JS_AtomToUInt32(atom));
+        //     return JS_NewString(ctx, buf);
+        // } else {
+        //     JSRuntime *rt = ctx->rt;
+        //     JSAtomStruct *p;
+        //     assert(atom < rt->atom_size);
+        //     p = rt->atom_array[atom];
+        //     if (p->atom_type == JS_ATOM_TYPE_STRING) {
+        //         goto ret_string;
+        //     } else if (force_string) {
+        //         if (p->len == 0 && p->is_wide_char != 0) {
+        //             /* no description string */
+        //             p = rt->atom_array[JS_ATOM_empty_string];
+        //         }
+        //     ret_string:
+        //         return JS_DupValue(ctx, JS_MKPTR(JS_TAG_STRING, p));
+        //     } else {
+        //         return JS_DupValue(ctx, JS_MKPTR(JS_TAG_SYMBOL, p));
+        //     }
+        // }
+    }
+
     /// Deinitializes and destroys the atom data referenced by the given ref.
     fn destroy_atom(self: *Self, ref: JSAtomRef) void {
         if (self.get_atom_data(ref)) |data| {
@@ -4216,7 +4840,7 @@ const JSRuntime = struct {
             // because they must be referenced by them.
             var gc_obj = get_gc_object(obj);
             switch(gc_obj) {
-                .JS_GC_OBJ_TYPE_JS_OBJECT => |object| self.free_object(object),
+                .JS_GC_OBJ_TYPE_JS_OBJECT => |object| self.destroy_object(object),
                 .JS_GC_OBJ_TYPE_FUNCTION_BYTECODE => |bytecode| self.free_bytecode(bytecode),
                 else => {
                     self.tmp_obj_list.remove(obj);
@@ -4697,7 +5321,57 @@ const JSRuntime = struct {
         // JS_MarkValue(rt, m->meta_obj, mark_func);
     }
 
-    fn free_object(self: *Self, obj: *JSObject) void {
+    /// Frees all of the objects that have been added to the zero refcount list.
+    fn destroy_zero_refcount(self: *Self) void {
+        var node = self.gc_zero_ref_count_list.first;
+        self.gc_phase = .JS_GC_PHASE_DECREF;
+        while(node) |item| {
+            std.debug.assert(item.data.ref_count == 0);
+            self.destroy_gc_object(item);
+            node = item.next;
+        }
+        self.gc_phase = .JS_GC_PHASE_NONE;
+
+        // struct list_head *el;
+        // JSGCObjectHeader *p;
+        
+        // rt->gc_phase = JS_GC_PHASE_DECREF;
+        // for(;;) {
+        //     el = rt->gc_zero_ref_count_list.next;
+        //     if (el == &rt->gc_zero_ref_count_list)
+        //         break;
+        //     p = list_entry(el, JSGCObjectHeader, link);
+        //     assert(p->ref_count == 0);
+        //     free_gc_object(rt, p);
+        // }
+        // rt->gc_phase = JS_GC_PHASE_NONE;
+    }
+
+    /// Frees the object associated with the given GC header.
+    fn destroy_gc_object(self: *Self, header: *JSGCObjectHeaderNode) void {
+        switch(get_gc_object(header)) {
+            .JS_GC_OBJ_TYPE_JS_OBJECT => |obj| {
+                self.destroy_object(obj);
+            },
+            .JS_GC_OBJ_TYPE_FUNCTION_BYTECODE => |bytecode| {
+                self.free_bytecode(bytecode);
+            },
+            else => unreachable
+        }
+
+        // switch(gp->gc_obj_type) {
+        //     case JS_GC_OBJ_TYPE_JS_OBJECT:
+        //         free_object(rt, (JSObject *)gp);
+        //         break;
+        //     case JS_GC_OBJ_TYPE_FUNCTION_BYTECODE:
+        //         free_function_bytecode(rt, (JSFunctionBytecode *)gp);
+        //         break;
+        //     default:
+        //         abort();
+        //     }
+    }
+
+    fn destroy_object(self: *Self, obj: *JSObject) void {
         // used to tell the object is invalid whne freeing
         // cycles
         obj.free_mark = true;
@@ -4711,7 +5385,7 @@ const JSRuntime = struct {
 
         // as an optimization we destroy the shape immediately
         // without putting it in gc_zero_ref_count_list
-        self.free_shape(shape);
+        self.release_shape(shape);
 
         // TODO: implement for WeakMap
         // if (obj.first_weak_ref) |ref| {
@@ -4781,9 +5455,11 @@ const JSRuntime = struct {
 
     /// Decrements the refcount of the given shape
     /// and deallocates it if it is no longer in use.
-    fn free_shape(self: *Self, shape: *JSShape) void {
+    /// As a result, the given reference is consumed and is no longer safe to use after calling.
+    fn release_shape(self: *Self, shape: *JSShape) void {
         shape.header.data.remove_ref();
         if (shape.header.data.ref_count <= 0) {
+            unreachable;
             // TODO:
             // uint32_t i;
             // JSShapeProperty *pr;
@@ -4804,8 +5480,148 @@ const JSRuntime = struct {
         }
     }
 
-    fn free_bytecode(self: *Self, bytecode: *JSFunctionBytecode) void {
-        self.free_bytecode_atoms(bytecode.byte_code_buf, true);
+    /// Releases the given value. Must be called anytime a JSValue will be cleared by the stack.
+    /// This JSValue is invalid once release() is called.
+    pub fn release_value(self: *Self, value: JSValue) void {
+        if (value.get_gc_header()) |header| {
+            header.remove_ref();
+            if (header.ref_count <= 0) {
+                self.destroy_value(value);
+            }
+        }
+    }
+
+    /// Destroys the given value and releases any attached resources.
+    pub fn destroy_value(self: *Self, value: JSValue) void {
+        switch(value) {
+            .JS_TAG_STRING => |str| {
+                self.destroy_atom_struct(str);
+            },
+            .JS_TAG_OBJECT, .JS_TAG_FUNCTION_BYTECODE => {
+                if (self.gc_phase != .JS_GC_PHASE_REMOVE_CYCLES) {
+                    var header = value.get_gc_header().?;
+                    self.remove_gc_obj(header);
+                    self.gc_zero_ref_count_list.append(header);
+                    if (self.gc_phase == .JS_GC_PHASE_NONE) {
+                        self.destroy_zero_refcount();
+                    }
+                }
+            },
+            .JS_TAG_MODULE => unreachable,
+            .JS_TAG_SYMBOL => |symbol| {
+                self.destroy_atom_struct(symbol);
+            },
+            // TODO: Add support for bignum
+            else => unreachable
+        }
+
+    //     uint32_t tag = JS_VALUE_GET_TAG(v);
+
+    // #ifdef DUMP_FREE
+    //     {
+    //         printf("Freeing ");
+    //         if (tag == JS_TAG_OBJECT) {
+    //             JS_DumpObject(rt, JS_VALUE_GET_OBJ(v));
+    //         } else {
+    //             JS_DumpValueShort(rt, v);
+    //             printf("\n");
+    //         }
+    //     }
+    // #endif
+
+    //     switch(tag) {
+    //     case JS_TAG_STRING:
+    //         {
+    //             JSString *p = JS_VALUE_GET_STRING(v);
+    //             if (p->atom_type) {
+    //                 JS_FreeAtomStruct(rt, p);
+    //             } else {
+    // #ifdef DUMP_LEAKS
+    //                 list_del(&p->link);
+    // #endif
+    //                 js_free_rt(rt, p);
+    //             }
+    //         }
+    //         break;
+    //     case JS_TAG_OBJECT:
+    //     case JS_TAG_FUNCTION_BYTECODE:
+    //         {
+    //             JSGCObjectHeader *p = JS_VALUE_GET_PTR(v);
+    //             if (rt->gc_phase != JS_GC_PHASE_REMOVE_CYCLES) {
+    //                 list_del(&p->link);
+    //                 list_add(&p->link, &rt->gc_zero_ref_count_list);
+    //                 if (rt->gc_phase == JS_GC_PHASE_NONE) {
+    //                     free_zero_refcount(rt);
+    //                 }
+    //             }
+    //         }
+    //         break;
+    //     case JS_TAG_MODULE:
+    //         abort(); /* never freed here */
+    //         break;
+    // #ifdef CONFIG_BIGNUM
+    //     case JS_TAG_BIG_INT:
+    //     case JS_TAG_BIG_FLOAT:
+    //         {
+    //             JSBigFloat *bf = JS_VALUE_GET_PTR(v);
+    //             bf_delete(&bf->num);
+    //             js_free_rt(rt, bf);
+    //         }
+    //         break;
+    //     case JS_TAG_BIG_DECIMAL:
+    //         {
+    //             JSBigDecimal *bf = JS_VALUE_GET_PTR(v);
+    //             bfdec_delete(&bf->num);
+    //             js_free_rt(rt, bf);
+    //         }
+    //         break;
+    // #endif
+    //     case JS_TAG_SYMBOL:
+    //         {
+    //             JSAtomStruct *p = JS_VALUE_GET_PTR(v);
+    //             JS_FreeAtomStruct(rt, p);
+    //         }
+    //         break;
+    //     default:
+    //         printf("__JS_FreeValue: unknown tag=%d\n", tag);
+    //         abort();
+    //     }
+    }
+
+    pub fn release_var_ref(self: *Self, var_ref: ?*JSVarRef) void {
+
+        if(var_ref) |ref| {
+            std.debug.assert(ref.header.data.ref_count > 0);
+            ref.header.data.remove_ref();
+            if (ref.header.data.ref_count == 0) {
+                if (ref.is_detached) {
+                    ref.value.release();
+                } else {
+
+                }
+            }
+        }
+
+        // if (var_ref) {
+//         assert(var_ref->header.ref_count > 0);
+//         if (--var_ref->header.ref_count == 0) {
+//             if (var_ref->is_detached) {
+//                 JS_FreeValueRT(rt, var_ref->value);
+//                 remove_gc_object(&var_ref->header);
+//             } else {
+//                 list_del(&var_ref->header.link); /* still on the stack */
+//             }
+//             js_free_rt(rt, var_ref);
+//         }
+//     }
+    }
+//     static void free_var_ref(JSRuntime *rt, JSVarRef *var_ref)
+// {
+//     
+// }
+
+    fn destroy_bytecode(self: *Self, bytecode: *JSFunctionBytecode) void {
+        self.destroy_bytecode_atoms(bytecode.byte_code_buf, true);
 
         // int i;
 
@@ -4851,7 +5667,7 @@ const JSRuntime = struct {
         //     }
     }
 
-    fn free_bytecode_atoms(self: *Self, bytecode: []u8, use_short_opcodes: bool) void {
+    fn destroy_bytecode_atoms(self: *Self, bytecode: []u8, use_short_opcodes: bool) void {
         var pos: usize = 0;
         while(pos < bytecode.len) {
             var op = bytecode[pos];
@@ -4864,7 +5680,7 @@ const JSRuntime = struct {
                 .atom_label_u8,
                 .atom_label_u16 => {
                     const atom: JSAtomRef = std.mem.readIntSlice(JSAtomRef, bytecode[pos+1..], std.builtin.endian);
-                    self.free_atom(atom);
+                    self.destroy_atom(atom);
                 },
                 else => {}
             }
@@ -4899,8 +5715,10 @@ const JSRuntime = struct {
         // }
     }
 
-    fn free_atom(self: *Self, atom: JSAtomRef) void {
+    fn destroy_atom(self: *Self, atom: JSAtomRef) void {
         if (!JSAtomEnum.is_const(atom)) {
+            // TODO: implement
+            unreachable;
             // const p = self.atom_hash[atom];
             // p.header.ref_count -= 1;
 
@@ -4914,17 +5732,22 @@ const JSRuntime = struct {
             //     return;
             // JS_FreeAtomStruct(rt, p);
         }
+
+        // TODO: implement
+        unreachable;
         // if (!__JS_AtomIsConst(v))
         // __JS_FreeAtom(rt, v);
 
     //     JSAtomStruct *p;
     }
 
-    fn free_atom_struct(self: *Self, atom: *JSAtomData) void {
+    fn destroy_atom_struct(self: *Self, atom: *JSAtomData) void {
         if (atom.atom_type != .JS_ATOM_TYPE_SYMBOL) {
             self.atom_hash.remove(atom.hash);
             self.allocator.allocator.destroy(atom);
         }
+        // TODO: Finish implementation
+        unreachable;
 
     //     #if 0   /* JS_ATOM_NULL is not refcounted: __JS_AtomIsConst() includes 0 */
     //     if (unlikely(i == JS_ATOM_NULL)) {
@@ -5328,3 +6151,11 @@ fn get_gc_object(gc: *JSGCObjectHeaderNode) GCObject {
 
 //     JSDebuggerInfo debugger_info;
 // };
+
+// static BOOL check_define_prop_flags(int prop_flags, int flags)
+// {
+//     BOOL has_accessor, is_getset;
+
+//     
+//     return TRUE;
+// }
