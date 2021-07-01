@@ -332,8 +332,54 @@ const JSValue = union(JSTag) {
                         return false;
                     }
                 }
-            }
+            },
+            .JS_TAG_SYMBOL => |sym1| {
+                switch(second) {
+                    .JS_TAG_SYMBOL => |sym2| {
+                        return sym1 == sym2;
+                    },
+                    else => {
+                        return false;
+                    }
+                }
+            },
+            .JS_TAG_OBJECT => |obj1| {
+                switch(second) {
 
+                    .JS_TAG_OBJECT => |obj2| {
+                        return obj1 == obj2;
+                    },
+                    else => {
+                        return false;
+                    }
+                }
+            },
+            .JS_TAG_INT => |int1| {
+                switch(second) {
+                    .JS_TAG_INT => |int2| {
+                        return JSValue.numberTest(i32, i32, int1, int2, mode);
+                    },
+                    .JS_TAG_FLOAT64 => |float2| {
+                        return JSValue.numberTest(i32, f64, int1, float2, mode);
+                    },
+                    else => {
+                        return false;
+                    }
+                }
+            },
+            .JS_TAG_FLOAT64 => |float1| {
+                switch(second) {
+                    .JS_TAG_FLOAT64 => |float2| {
+                        return JSValue.numberTest(f64, f64, float1, float2, mode);
+                    },
+                    .JS_TAG_INT => |int2| {
+                        return JSValue.numberTest(f64, i32, float1, int2, mode);
+                    },
+                    else => {
+                        return false;
+                    }
+                }
+            },
         }
 
         // /* XXX: Should take JSValueConst arguments */
@@ -495,6 +541,41 @@ const JSValue = union(JSTag) {
 //     return res;
 // }
     }
+
+    // TODO: Add tests for the following functions
+    fn numberTest(comptime t1: type, comptime t2: type, num1: t1, num2: t2, mode: JSStrictEqualityModeEnum) bool {
+        // TODO: Add unlikely hint
+        if (mode >= .JS_EQ_SAME_VALUE) {
+            if (std.math.isNan(num1) || std.math.isNan(num2)) {
+                return std.math.isNan(num1) == std.math.isNan(num2);
+            } else if (mode == .JS_EQ_SAME_VALUE_ZERO) {
+                return (num1 == num2);
+            } else {
+                var v1: u64 = @bitCast(u64, num1);
+                var v2: u64 = @bitCast(u64, num2);
+                return (v1 == v2); // +0 != -0
+            }
+        } else { 
+            return num1 == num2; // if NaN return false and +0 == -0
+        }
+        //         if (unlikely(eq_mode >= JS_EQ_SAME_VALUE)) {
+    //             JSFloat64Union u1, u2;
+    //             /* NaN is not always normalized, so this test is necessary */
+    //             if (isnan(d1) || isnan(d2)) {
+    //                 res = isnan(d1) == isnan(d2);
+    //             } else if (eq_mode == JS_EQ_SAME_VALUE_ZERO) {
+    //                 res = (d1 == d2); /* +0 == -0 */
+    //             } else {
+    //                 u1.d = d1;
+    //                 u2.d = d2;
+    //                 res = (u1.u64 == u2.u64); /* +0 != -0 */
+    //             }
+    //         } else {
+    //             res = (d1 == d2); /* if NaN return false and +0 == -0 */
+    //         }
+    //         goto done_no_free;
+    }
+
 };
 
 /// The possible types of atoms.
