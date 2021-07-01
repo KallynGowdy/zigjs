@@ -283,6 +283,20 @@ const JSValue = union(JSTag) {
         };
     }
 
+    /// Creates a new JSValue that references the given object.
+    pub fn initFloat(float: f64) Self {
+        return .{
+            .JS_TAG_FLOAT64 = float
+        };
+    }
+
+    /// Creates a new JSValue that represents the given boolean.
+    pub fn initBool(b: bool) Self {
+        return .{
+            .JS_TAG_BOOL = b
+        };
+    }
+
     /// Duplicates this value by incrementing the ref_count of the attached object.
     /// Returns a copy of the value.
     pub fn dupe(self: *Self) JSValue {
@@ -307,7 +321,7 @@ const JSValue = union(JSTag) {
         };
     }
 
-    pub fn areEqual(first: JSValue, second: JSValue, mode: JSStrictEqualityModeEnum) bool {
+    pub fn are_equal(first: JSValue, second: JSValue, mode: JSStrictEqualityModeEnum) bool {
         // TODO: Finish porting
         switch(first) {
             .JS_TAG_BOOL => |b1| {
@@ -321,12 +335,12 @@ const JSValue = union(JSTag) {
                 }
             },
             .JS_TAG_NULL, .JS_TAG_UNDEFINED => {
-                return first == second;
+                return @as(JSTag, first) == @as(JSTag, second);
             },
             .JS_TAG_STRING => |str1| {
                 switch(second) {
                     .JS_TAG_STRING => |str2| {
-                        return JSString.compare(str1, str2) == 0;
+                        return JSString.compare(str1, str2) == .eq;
                     },
                     else => {
                         return false;
@@ -357,10 +371,10 @@ const JSValue = union(JSTag) {
             .JS_TAG_INT => |int1| {
                 switch(second) {
                     .JS_TAG_INT => |int2| {
-                        return JSValue.numberTest(i32, i32, int1, int2, mode);
+                        return JSValue.number_test(i32, i32, int1, int2, mode);
                     },
                     .JS_TAG_FLOAT64 => |float2| {
-                        return JSValue.numberTest(i32, f64, int1, float2, mode);
+                        return JSValue.number_test(i32, f64, int1, float2, mode);
                     },
                     else => {
                         return false;
@@ -370,17 +384,23 @@ const JSValue = union(JSTag) {
             .JS_TAG_FLOAT64 => |float1| {
                 switch(second) {
                     .JS_TAG_FLOAT64 => |float2| {
-                        return JSValue.numberTest(f64, f64, float1, float2, mode);
+                        return JSValue.number_test(f64, f64, float1, float2, mode);
                     },
                     .JS_TAG_INT => |int2| {
-                        return JSValue.numberTest(f64, i32, float1, int2, mode);
+                        return JSValue.number_test(f64, i32, float1, int2, mode);
                     },
                     else => {
                         return false;
                     }
                 }
             },
+
+            // TODO: Add support for bignum
+
+            else => return false
         }
+
+
 
         // /* XXX: Should take JSValueConst arguments */
 // static BOOL js_strict_eq2(JSContext *ctx, JSValue op1, JSValue op2,
@@ -542,8 +562,72 @@ const JSValue = union(JSTag) {
 // }
     }
 
+    test "JSValue.are_equal()" {
+        { // Floats
+            try testing.expectEqual(are_equal(JSValue.initFloat(123.456), JSValue.initFloat(123.456), .JS_EQ_STRICT), true);
+            try testing.expectEqual(are_equal(JSValue.initFloat(123.456), JSValue.initFloat(123.456), .JS_EQ_SAME_VALUE), true);
+            try testing.expectEqual(are_equal(JSValue.initFloat(123.456), JSValue.initFloat(123.456), .JS_EQ_SAME_VALUE_ZERO), true);
+            
+            try testing.expectEqual(are_equal(JSValue.initFloat(123.0), JSValue.initFloat(123.456), .JS_EQ_STRICT), false);
+            try testing.expectEqual(are_equal(JSValue.initFloat(123.0), JSValue.initFloat(123.456), .JS_EQ_SAME_VALUE), false);
+            try testing.expectEqual(are_equal(JSValue.initFloat(123.0), JSValue.initFloat(123.456), .JS_EQ_SAME_VALUE_ZERO), false);
+
+            try testing.expectEqual(are_equal(JSValue.initFloat(std.math.nan(f64)), JSValue.initFloat(std.math.nan(f64)), .JS_EQ_STRICT), false);
+            try testing.expectEqual(are_equal(JSValue.initFloat(std.math.nan(f64)), JSValue.initFloat(std.math.nan(f64)), .JS_EQ_SAME_VALUE), true);
+            try testing.expectEqual(are_equal(JSValue.initFloat(std.math.nan(f64)), JSValue.initFloat(std.math.nan(f64)), .JS_EQ_SAME_VALUE_ZERO), true);
+
+            try testing.expectEqual(are_equal(JSValue.initFloat(std.math.inf(f64)), JSValue.initFloat(std.math.inf(f64)), .JS_EQ_STRICT), true);
+            try testing.expectEqual(are_equal(JSValue.initFloat(std.math.inf(f64)), JSValue.initFloat(std.math.inf(f64)), .JS_EQ_SAME_VALUE), true);
+            try testing.expectEqual(are_equal(JSValue.initFloat(std.math.inf(f64)), JSValue.initFloat(std.math.inf(f64)), .JS_EQ_SAME_VALUE_ZERO), true);
+
+            try testing.expectEqual(are_equal(JSValue.initFloat(-0.0), JSValue.initFloat(0.0), .JS_EQ_STRICT), true);
+            try testing.expectEqual(are_equal(JSValue.initFloat(-0.0), JSValue.initFloat(0.0), .JS_EQ_SAME_VALUE), false);
+            try testing.expectEqual(are_equal(JSValue.initFloat(-0.0), JSValue.initFloat(0.0), .JS_EQ_SAME_VALUE_ZERO), true);
+        }
+
+        { // Ints
+            try testing.expectEqual(are_equal(JSValue.initInt(123), JSValue.initInt(123), .JS_EQ_STRICT), true);
+            try testing.expectEqual(are_equal(JSValue.initInt(123), JSValue.initInt(123), .JS_EQ_SAME_VALUE), true);
+            try testing.expectEqual(are_equal(JSValue.initInt(123), JSValue.initInt(123), .JS_EQ_SAME_VALUE_ZERO), true);
+
+            try testing.expectEqual(are_equal(JSValue.initInt(-123), JSValue.initInt(-123), .JS_EQ_STRICT), true);
+            try testing.expectEqual(are_equal(JSValue.initInt(-123), JSValue.initInt(-123), .JS_EQ_SAME_VALUE), true);
+            try testing.expectEqual(are_equal(JSValue.initInt(-123), JSValue.initInt(-123), .JS_EQ_SAME_VALUE_ZERO), true);
+
+            try testing.expectEqual(are_equal(JSValue.initInt(123), JSValue.initInt(0), .JS_EQ_STRICT), false);
+            try testing.expectEqual(are_equal(JSValue.initInt(123), JSValue.initInt(0), .JS_EQ_SAME_VALUE), false);
+            try testing.expectEqual(are_equal(JSValue.initInt(123), JSValue.initInt(0), .JS_EQ_SAME_VALUE_ZERO), false);
+
+            try testing.expectEqual(are_equal(JSValue.initInt(-123), JSValue.initInt(0), .JS_EQ_STRICT), false);
+            try testing.expectEqual(are_equal(JSValue.initInt(-123), JSValue.initInt(0), .JS_EQ_SAME_VALUE), false);
+            try testing.expectEqual(are_equal(JSValue.initInt(-123), JSValue.initInt(0), .JS_EQ_SAME_VALUE_ZERO), false);
+        }
+
+        { // Bools
+            try testing.expectEqual(are_equal(JSValue.initBool(true), JSValue.initBool(true), .JS_EQ_STRICT), true);
+            try testing.expectEqual(are_equal(JSValue.initBool(true), JSValue.initBool(true), .JS_EQ_SAME_VALUE), true);
+            try testing.expectEqual(are_equal(JSValue.initBool(true), JSValue.initBool(true), .JS_EQ_SAME_VALUE_ZERO), true);
+
+            try testing.expectEqual(are_equal(JSValue.initBool(true), JSValue.initBool(false), .JS_EQ_STRICT), false);
+            try testing.expectEqual(are_equal(JSValue.initBool(true), JSValue.initBool(false), .JS_EQ_SAME_VALUE), false);
+            try testing.expectEqual(are_equal(JSValue.initBool(true), JSValue.initBool(false), .JS_EQ_SAME_VALUE_ZERO), false);
+        }
+
+        { // Nulls
+            try testing.expectEqual(are_equal(JS_NULL, JS_NULL, .JS_EQ_STRICT), true);
+            try testing.expectEqual(are_equal(JS_NULL, JS_NULL, .JS_EQ_SAME_VALUE), true);
+            try testing.expectEqual(are_equal(JS_NULL, JS_NULL, .JS_EQ_SAME_VALUE_ZERO), true);
+        }
+
+        { // Undefined
+            try testing.expectEqual(are_equal(JS_UNDEFINED, JS_UNDEFINED, .JS_EQ_STRICT), true);
+            try testing.expectEqual(are_equal(JS_UNDEFINED, JS_UNDEFINED, .JS_EQ_SAME_VALUE), true);
+            try testing.expectEqual(are_equal(JS_UNDEFINED, JS_UNDEFINED, .JS_EQ_SAME_VALUE_ZERO), true);
+        }
+    }
+
     // TODO: Add tests for the following functions
-    fn numberTest(comptime t1: type, comptime t2: type, num1: t1, num2: t2, mode: JSStrictEqualityModeEnum) bool {
+    fn number_test(comptime t1: type, comptime t2: type, num1: t1, num2: t2, mode: JSStrictEqualityModeEnum) bool {
         // TODO: Add unlikely hint
         if (@enumToInt(mode) >= @enumToInt(JSStrictEqualityModeEnum.JS_EQ_SAME_VALUE)) {
             if (std.math.isNan(num1) or std.math.isNan(num2)) {
@@ -599,64 +683,64 @@ const JSValue = union(JSTag) {
     //         goto done_no_free;
     }
 
-    test "JSValue.numberTest()" {
+    test "JSValue.number_test()" {
         { // Strict
-            try testing.expectEqual(numberTest(i32, i32, 1, 1, .JS_EQ_STRICT) , true);
-            try testing.expectEqual(numberTest(i32, i32, 0, 0, .JS_EQ_STRICT) , true);
-            try testing.expectEqual(numberTest(i32, f64, 123, 123.0, .JS_EQ_STRICT) , true);
-            try testing.expectEqual(numberTest(f64, i32, 123.0, 123, .JS_EQ_STRICT) , true);
-            try testing.expectEqual(numberTest(f64, f64, 123.456, 123.456, .JS_EQ_STRICT) , true);
-            try testing.expectEqual(numberTest(f64, f64, -0.0, 0.0, .JS_EQ_STRICT) , true);
-            try testing.expectEqual(numberTest(f64, f64, std.math.inf(f64), std.math.inf(f64), .JS_EQ_STRICT), true);
-            try testing.expectEqual(numberTest(f64, f64, -std.math.inf(f64), -std.math.inf(f64), .JS_EQ_STRICT), true);
+            try testing.expectEqual(number_test(i32, i32, 1, 1, .JS_EQ_STRICT) , true);
+            try testing.expectEqual(number_test(i32, i32, 0, 0, .JS_EQ_STRICT) , true);
+            try testing.expectEqual(number_test(i32, f64, 123, 123.0, .JS_EQ_STRICT) , true);
+            try testing.expectEqual(number_test(f64, i32, 123.0, 123, .JS_EQ_STRICT) , true);
+            try testing.expectEqual(number_test(f64, f64, 123.456, 123.456, .JS_EQ_STRICT) , true);
+            try testing.expectEqual(number_test(f64, f64, -0.0, 0.0, .JS_EQ_STRICT) , true);
+            try testing.expectEqual(number_test(f64, f64, std.math.inf(f64), std.math.inf(f64), .JS_EQ_STRICT), true);
+            try testing.expectEqual(number_test(f64, f64, -std.math.inf(f64), -std.math.inf(f64), .JS_EQ_STRICT), true);
 
-            try testing.expectEqual(numberTest(i32, i32, 1, 2, .JS_EQ_STRICT) , false);
-            try testing.expectEqual(numberTest(i32, i32, 1, 0, .JS_EQ_STRICT) , false);
-            try testing.expectEqual(numberTest(i32, f64, 0, 123.0, .JS_EQ_STRICT) , false);
-            try testing.expectEqual(numberTest(f64, i32, 0.0, 123, .JS_EQ_STRICT) , false);
-            try testing.expectEqual(numberTest(f64, f64, 0.0, 123.456, .JS_EQ_STRICT) , false);
-            try testing.expectEqual(numberTest(f64, f64, std.math.nan(f64), 0.0, .JS_EQ_STRICT) , false);
-            try testing.expectEqual(numberTest(f64, f64, std.math.nan(f64), std.math.nan(f64), .JS_EQ_STRICT) , false);
+            try testing.expectEqual(number_test(i32, i32, 1, 2, .JS_EQ_STRICT) , false);
+            try testing.expectEqual(number_test(i32, i32, 1, 0, .JS_EQ_STRICT) , false);
+            try testing.expectEqual(number_test(i32, f64, 0, 123.0, .JS_EQ_STRICT) , false);
+            try testing.expectEqual(number_test(f64, i32, 0.0, 123, .JS_EQ_STRICT) , false);
+            try testing.expectEqual(number_test(f64, f64, 0.0, 123.456, .JS_EQ_STRICT) , false);
+            try testing.expectEqual(number_test(f64, f64, std.math.nan(f64), 0.0, .JS_EQ_STRICT) , false);
+            try testing.expectEqual(number_test(f64, f64, std.math.nan(f64), std.math.nan(f64), .JS_EQ_STRICT) , false);
         }
 
         { // JS_EQ_SAME_VALUE
-            try testing.expectEqual(numberTest(i32, i32, 1, 1, .JS_EQ_SAME_VALUE) , true);
-            try testing.expectEqual(numberTest(i32, i32, 0, 0, .JS_EQ_SAME_VALUE) , true);
-            try testing.expectEqual(numberTest(i32, f64, 123, 123.0, .JS_EQ_SAME_VALUE) , true);
-            try testing.expectEqual(numberTest(f64, i32, 123.0, 123, .JS_EQ_SAME_VALUE) , true);
-            try testing.expectEqual(numberTest(f64, f64, 123.456, 123.456, .JS_EQ_SAME_VALUE) , true);
-            try testing.expectEqual(numberTest(f64, f64, std.math.nan(f64), std.math.nan(f64), .JS_EQ_SAME_VALUE) , true);
-            try testing.expectEqual(numberTest(f64, f64, -0.0, 0.0, .JS_EQ_SAME_VALUE) , false);
-            try testing.expectEqual(numberTest(f64, f64, std.math.inf(f64), std.math.inf(f64), .JS_EQ_SAME_VALUE), true);
-            try testing.expectEqual(numberTest(f64, f64, -std.math.inf(f64), -std.math.inf(f64), .JS_EQ_SAME_VALUE), true);
+            try testing.expectEqual(number_test(i32, i32, 1, 1, .JS_EQ_SAME_VALUE) , true);
+            try testing.expectEqual(number_test(i32, i32, 0, 0, .JS_EQ_SAME_VALUE) , true);
+            try testing.expectEqual(number_test(i32, f64, 123, 123.0, .JS_EQ_SAME_VALUE) , true);
+            try testing.expectEqual(number_test(f64, i32, 123.0, 123, .JS_EQ_SAME_VALUE) , true);
+            try testing.expectEqual(number_test(f64, f64, 123.456, 123.456, .JS_EQ_SAME_VALUE) , true);
+            try testing.expectEqual(number_test(f64, f64, std.math.nan(f64), std.math.nan(f64), .JS_EQ_SAME_VALUE) , true);
+            try testing.expectEqual(number_test(f64, f64, -0.0, 0.0, .JS_EQ_SAME_VALUE) , false);
+            try testing.expectEqual(number_test(f64, f64, std.math.inf(f64), std.math.inf(f64), .JS_EQ_SAME_VALUE), true);
+            try testing.expectEqual(number_test(f64, f64, -std.math.inf(f64), -std.math.inf(f64), .JS_EQ_SAME_VALUE), true);
 
-            try testing.expectEqual(numberTest(i32, i32, 1, 2, .JS_EQ_SAME_VALUE) , false);
-            try testing.expectEqual(numberTest(i32, i32, 1, 0, .JS_EQ_SAME_VALUE) , false);
-            try testing.expectEqual(numberTest(i32, f64, 0, 123.0, .JS_EQ_SAME_VALUE) , false);
-            try testing.expectEqual(numberTest(f64, i32, 0.0, 123, .JS_EQ_SAME_VALUE) , false);
-            try testing.expectEqual(numberTest(f64, f64, 0.0, 123.456, .JS_EQ_SAME_VALUE) , false);
-            try testing.expectEqual(numberTest(f64, f64, std.math.nan(f64), 0, .JS_EQ_SAME_VALUE) , false);
-            try testing.expectEqual(numberTest(f64, f64, -std.math.inf(f64), std.math.inf(f64), .JS_EQ_SAME_VALUE), false);
+            try testing.expectEqual(number_test(i32, i32, 1, 2, .JS_EQ_SAME_VALUE) , false);
+            try testing.expectEqual(number_test(i32, i32, 1, 0, .JS_EQ_SAME_VALUE) , false);
+            try testing.expectEqual(number_test(i32, f64, 0, 123.0, .JS_EQ_SAME_VALUE) , false);
+            try testing.expectEqual(number_test(f64, i32, 0.0, 123, .JS_EQ_SAME_VALUE) , false);
+            try testing.expectEqual(number_test(f64, f64, 0.0, 123.456, .JS_EQ_SAME_VALUE) , false);
+            try testing.expectEqual(number_test(f64, f64, std.math.nan(f64), 0, .JS_EQ_SAME_VALUE) , false);
+            try testing.expectEqual(number_test(f64, f64, -std.math.inf(f64), std.math.inf(f64), .JS_EQ_SAME_VALUE), false);
         }
 
         { // JS_EQ_SAME_VALUE_ZERO
-            try testing.expectEqual(numberTest(i32, i32, 1, 1, .JS_EQ_SAME_VALUE_ZERO) , true);
-            try testing.expectEqual(numberTest(i32, i32, 0, 0, .JS_EQ_SAME_VALUE_ZERO) , true);
-            try testing.expectEqual(numberTest(i32, f64, 123, 123.0, .JS_EQ_SAME_VALUE_ZERO) , true);
-            try testing.expectEqual(numberTest(f64, i32, 123.0, 123, .JS_EQ_SAME_VALUE_ZERO) , true);
-            try testing.expectEqual(numberTest(f64, f64, 123.456, 123.456, .JS_EQ_SAME_VALUE_ZERO) , true);
-            try testing.expectEqual(numberTest(f64, f64, std.math.nan(f64), std.math.nan(f64), .JS_EQ_SAME_VALUE_ZERO) , true);
-            try testing.expectEqual(numberTest(f64, f64, -0.0, 0.0, .JS_EQ_SAME_VALUE_ZERO) , true);
-            try testing.expectEqual(numberTest(f64, f64, std.math.inf(f64), std.math.inf(f64), .JS_EQ_SAME_VALUE_ZERO), true);
-            try testing.expectEqual(numberTest(f64, f64, -std.math.inf(f64), -std.math.inf(f64), .JS_EQ_SAME_VALUE_ZERO), true);
+            try testing.expectEqual(number_test(i32, i32, 1, 1, .JS_EQ_SAME_VALUE_ZERO) , true);
+            try testing.expectEqual(number_test(i32, i32, 0, 0, .JS_EQ_SAME_VALUE_ZERO) , true);
+            try testing.expectEqual(number_test(i32, f64, 123, 123.0, .JS_EQ_SAME_VALUE_ZERO) , true);
+            try testing.expectEqual(number_test(f64, i32, 123.0, 123, .JS_EQ_SAME_VALUE_ZERO) , true);
+            try testing.expectEqual(number_test(f64, f64, 123.456, 123.456, .JS_EQ_SAME_VALUE_ZERO) , true);
+            try testing.expectEqual(number_test(f64, f64, std.math.nan(f64), std.math.nan(f64), .JS_EQ_SAME_VALUE_ZERO) , true);
+            try testing.expectEqual(number_test(f64, f64, -0.0, 0.0, .JS_EQ_SAME_VALUE_ZERO) , true);
+            try testing.expectEqual(number_test(f64, f64, std.math.inf(f64), std.math.inf(f64), .JS_EQ_SAME_VALUE_ZERO), true);
+            try testing.expectEqual(number_test(f64, f64, -std.math.inf(f64), -std.math.inf(f64), .JS_EQ_SAME_VALUE_ZERO), true);
 
-            try testing.expectEqual(numberTest(i32, i32, 1, 2, .JS_EQ_SAME_VALUE_ZERO) , false);
-            try testing.expectEqual(numberTest(i32, i32, 1, 0, .JS_EQ_SAME_VALUE_ZERO) , false);
-            try testing.expectEqual(numberTest(i32, f64, 0, 123.0, .JS_EQ_SAME_VALUE_ZERO) , false);
-            try testing.expectEqual(numberTest(f64, i32, 0.0, 123, .JS_EQ_SAME_VALUE_ZERO) , false);
-            try testing.expectEqual(numberTest(f64, f64, 0.0, 123.456, .JS_EQ_SAME_VALUE_ZERO) , false);
-            try testing.expectEqual(numberTest(f64, f64, std.math.nan(f64), 0.0, .JS_EQ_SAME_VALUE_ZERO) , false);
-            try testing.expectEqual(numberTest(f64, f64, -std.math.inf(f64), std.math.inf(f64), .JS_EQ_SAME_VALUE_ZERO), false);
+            try testing.expectEqual(number_test(i32, i32, 1, 2, .JS_EQ_SAME_VALUE_ZERO) , false);
+            try testing.expectEqual(number_test(i32, i32, 1, 0, .JS_EQ_SAME_VALUE_ZERO) , false);
+            try testing.expectEqual(number_test(i32, f64, 0, 123.0, .JS_EQ_SAME_VALUE_ZERO) , false);
+            try testing.expectEqual(number_test(f64, i32, 0.0, 123, .JS_EQ_SAME_VALUE_ZERO) , false);
+            try testing.expectEqual(number_test(f64, f64, 0.0, 123.456, .JS_EQ_SAME_VALUE_ZERO) , false);
+            try testing.expectEqual(number_test(f64, f64, std.math.nan(f64), 0.0, .JS_EQ_SAME_VALUE_ZERO) , false);
+            try testing.expectEqual(number_test(f64, f64, -std.math.inf(f64), std.math.inf(f64), .JS_EQ_SAME_VALUE_ZERO), false);
         }
     }
 
