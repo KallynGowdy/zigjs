@@ -321,6 +321,22 @@ const JSValue = union(JSTag) {
         };
     }
 
+    /// Determines if the given values are equal to each other using strict equality.
+    pub fn are_equal_strict(first: JSValue, second: JSValue) bool {
+        return are_equal(first, second, .JS_EQ_STRICT);
+    }
+
+    /// Determines if the given values are equal to each other using "same value" equality.
+    pub fn are_same_value(first: JSValue, second: JSValue) bool {
+        return are_equal(first, second, .JS_EQ_SAME_VALUE);
+    }
+
+    /// Determines if the given values are equal to each other using "same value zero" equality.
+    pub fn are_same_value_zero(first: JSValue, second: JSValue) bool {
+        return are_equal(first, second, .JS_EQ_SAME_VALUE_ZERO);
+    }
+
+    /// Determines if the given values are equal to each other using the given equality mode.
     pub fn are_equal(first: JSValue, second: JSValue, mode: JSStrictEqualityModeEnum) bool {
         // TODO: Finish porting
         switch(first) {
@@ -4512,7 +4528,7 @@ const JSContext = struct {
                             // clear property and update
                             var p = try obj.prepare_shape_property_update(self, prop_shape);
                             prop_shape = p.property_shape;
-                            self.runtime.destroy_autoinit(prop);
+                            self.runtime.release_autoinit(prop);
 
                             prop_shape.flags &= ~JS_PROP_TMASK;
                             prop.* = .{
@@ -4620,11 +4636,36 @@ const JSContext = struct {
     //                     pr->u.value = JS_UNDEFINED;
                     } else if(prop_shape.flags & JS_PROP_TMASK == JS_PROP_VARREF) {
                         // Note: JS_PROP_VARREF is always writable
-                    } 
-                    // TODO: Finish
-                    // else if(prop_shape.flags & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE) == 0 and flags & JS_PROP_HAS_VALUE != 0 and ) {
+                    } else if(prop_shape.flags & JS_PROP_TMASK == JS_PROP_AUTOINIT) {
+                        // clear property and update
+                        var prepared = try obj.prepare_shape_property_update(self, prop_shape);
+                        prop_shape = p.property_shape;
+                        self.runtime.release_autoinit(prop);
 
-                    // }
+                        prop_shape.flags = prop_shape.flags & (~JS_PROP_TMASK);
+                        prop.value = JS_UNDEFINED;
+
+                    } //else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_AUTOINIT) {
+    //                     /* clear property and update */
+    //                     if (js_shape_prepare_update(ctx, p, &prs))
+    //                         return -1;
+    //                     js_autoinit_free(ctx->rt, pr);
+    //                     prs->flags &= ~JS_PROP_TMASK;
+    //                     pr->u.value = JS_UNDEFINED;
+    //                 }
+                    else if (
+                        prop_shape.flags & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE) == 0 and 
+                        flags & JS_PROP_HAS_VALUE != 0 and 
+                        !JSValue.are_same_value(val, prop.value)) {
+                            // not configurable
+                            return DefinePropertyError.PropertyNotConfigurable;
+                    }
+
+                    if (prop_shape.flags & JS_PROP_LENGTH != 0) {
+                        if (flags & JS_PROP_HAS_VALUE != 0) {
+
+                        }
+                    }
 
 
                     // if ((prs->flags & JS_PROP_TMASK) == JS_PROP_GETSET) {
@@ -4632,14 +4673,7 @@ const JSContext = struct {
     
     //                 } else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_VARREF) {
     //                     /* Note: JS_PROP_VARREF is always writable */
-    //                 } else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_AUTOINIT) {
-    //                     /* clear property and update */
-    //                     if (js_shape_prepare_update(ctx, p, &prs))
-    //                         return -1;
-    //                     js_autoinit_free(ctx->rt, pr);
-    //                     prs->flags &= ~JS_PROP_TMASK;
-    //                     pr->u.value = JS_UNDEFINED;
-    //                 } else {
+    //                 }  else {
     //                     if ((prs->flags & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE)) == 0 &&
     //                         (flags & JS_PROP_HAS_VALUE) &&
     //                         !js_same_value(ctx, val, pr->u.value)) {
@@ -6519,6 +6553,10 @@ const JSRuntime = struct {
 //             js_free_rt(rt, var_ref);
 //         }
 //     }
+    }
+
+    pub fn release_autoinit(self: *Self, property: *JSProperty) void {
+        self.release_context(property.auto_init.realm);
     }
 //     static void free_var_ref(JSRuntime *rt, JSVarRef *var_ref)
 // {
